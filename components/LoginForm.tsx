@@ -22,20 +22,21 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
   const [tempUser, setTempUser] = useState<any>(null);
   
   // Login fields
-  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   
   // Profile fields
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [region, setRegion] = useState('');
   const [district, setDistrict] = useState('');
-  const [phone, setPhone] = useState('');
 
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     
     // Special admin bypass
-    if (email === 'admin' && password === 'admin') {
+    if (phone === 'admin' && password === 'admin') {
       onDemoAdminLogin();
       return;
     }
@@ -43,18 +44,44 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
     setLoading(true);
     try {
       const { signInWithEmailAndPassword, createUserWithEmailAndPassword } = await import('firebase/auth');
+      
+      // Map phone to a dummy email for Firebase Auth
+      const dummyEmail = `${phone.replace(/\+/g, '')}@road.ai`;
+
       if (isRegistering) {
-        const result = await createUserWithEmailAndPassword(auth, email, password);
-        setTempUser(result.user);
-        setShowProfileSetup(true);
+        if (!firstName || !lastName || !region || !district || !phone || !password) {
+          setError("Iltimos, barcha maydonlarni to'ldiring.");
+          setLoading(false);
+          return;
+        }
+
+        const result = await createUserWithEmailAndPassword(auth, dummyEmail, password);
+        const user = result.user;
+
+        const userData = {
+          id: user.uid,
+          firstName,
+          lastName,
+          email: dummyEmail,
+          phone,
+          region,
+          district,
+          role: UserRole.USER,
+          isBlocked: false,
+          personalCode: password, // The "code" the user set
+          createdAt: Date.now()
+        };
+
+        await setDoc(doc(db, 'users', user.uid), userData);
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        await signInWithEmailAndPassword(auth, dummyEmail, password);
       }
     } catch (err: any) {
       console.error(err);
-      if (err.code === 'auth/user-not-found') setError("Foydalanuvchi topilmadi.");
-      else if (err.code === 'auth/wrong-password') setError("Noto'g'ri parol.");
-      else if (err.code === 'auth/email-already-in-use') setError("Bu email band.");
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') setError("Telefon raqami yoki kod noto'g'ri.");
+      else if (err.code === 'auth/wrong-password') setError("Noto'g'ri kod.");
+      else if (err.code === 'auth/email-already-in-use') setError("Bu telefon raqami allaqachon ro'yxatdan o'tgan.");
+      else if (err.code === 'auth/operation-not-allowed') setError("Tizimda email/parol orqali kirish yoqilmagan. Iltimos, Firebase Console'da uni yoqing.");
       else setError("Xatolik yuz berdi: " + err.message);
     } finally {
       setLoading(false);
@@ -76,9 +103,8 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
           await auth.signOut();
           setError("Sizning hisobingiz bloklangan.");
         }
-        // App.tsx will handle the redirect
       } else {
-        // New user - need profile info
+        // New user from Google - still need region/district
         setTempUser(user);
         setShowProfileSetup(true);
       }
@@ -100,16 +126,15 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
         firstName: tempUser.displayName?.split(' ')[0] || '',
         lastName: tempUser.displayName?.split(' ').slice(1).join(' ') || '',
         email: tempUser.email,
+        phone: phone || '', // Use the phone if they provided it
         region,
         district,
-        phone,
         role: UserRole.USER,
         isBlocked: false,
         createdAt: Date.now()
       };
 
       await setDoc(doc(db, 'users', tempUser.uid), userData);
-      // App.tsx will handle the rest
     } catch (err) {
       console.error(err);
       setError("Profilni saqlashda xatolik.");
@@ -154,22 +179,75 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
             <div className="space-y-6">
               <form onSubmit={handleManualLogin} className="space-y-4">
                 <div className="space-y-3">
+                  {isRegistering && (
+                    <>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="relative">
+                          <i className="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]"></i>
+                          <input
+                            type="text"
+                            placeholder="Ism"
+                            required
+                            value={firstName}
+                            onChange={(e) => setFirstName(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-all font-medium"
+                          />
+                        </div>
+                        <div className="relative">
+                          <i className="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]"></i>
+                          <input
+                            type="text"
+                            placeholder="Familiya"
+                            required
+                            value={lastName}
+                            onChange={(e) => setLastName(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-all font-medium"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <select
+                          required
+                          value={region}
+                          onChange={(e) => setRegion(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-xs text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
+                        >
+                          <option value="">Viloyat</option>
+                          {regions.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+
+                        <select
+                          required
+                          value={district}
+                          onChange={(e) => setDistrict(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-xs text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
+                        >
+                          <option value="">Tuman</option>
+                          {region && districts[region as keyof typeof districts]?.map(d => (
+                            <option key={d} value={d}>{d}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  )}
+
                   <div className="relative">
-                    <i className="fas fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                    <i className="fas fa-phone absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
                     <input
-                      type="text"
-                      placeholder="Email yoki login"
+                      type="tel"
+                      placeholder="Telefon raqami (+998...)"
                       required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-all font-medium"
                     />
                   </div>
                   <div className="relative">
-                    <i className="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                    <i className="fas fa-key absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
                     <input
                       type="password"
-                      placeholder="Parol"
+                      placeholder={isRegistering ? "Kod yarating" : "Kod"}
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
@@ -210,7 +288,10 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
 
               <div className="text-center">
                 <button 
-                  onClick={() => setIsRegistering(!isRegistering)}
+                  onClick={() => {
+                    setIsRegistering(!isRegistering);
+                    setError('');
+                  }}
                   className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline"
                 >
                   {isRegistering ? "Akkauntingiz bormi? Kirish" : "Yangi akkaunt ochish (Register)"}
