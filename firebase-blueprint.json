@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user profile",
+      "type": "object",
+      "properties": {
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "role": { "type": "string", "enum": ["USER", "ADMIN"] },
+        "personalCode": { "type": "string" },
+        "region": { "type": "string" },
+        "district": { "type": "string" },
+        "isBlocked": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["firstName", "lastName", "email", "phone", "role", "region", "district", "createdAt"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Road problem report",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "image": { "type": "string" },
+        "location": { "type": "object" },
+        "analysis": { "type": "object" },
+        "timestamp": { "type": "number" },
+        "status": { "type": "string" },
+        "region": { "type": "string" },
+        "repairStartedAt": { "type": "number" },
+        "fixedAt": { "type": "number" }
+      },
+      "required": ["userId", "userName", "image", "location", "analysis", "timestamp", "status", "region"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User notification",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "isRead": { "type": "boolean" },
+        "type": { "type": "string" }
+      },
+      "required": ["userId", "title", "message", "timestamp", "isRead", "type"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "Road reports"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications"
+    }
+  }
+}

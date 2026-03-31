@@ -1,0 +1,8 @@
+{
+  "name": "Yo'l Nosozliklarini Aniqlash Tizimi",
+  "description": "Sun'iy intellekt yordamida yo'l yuzasidagi muammolarni (chuqur, yoriq, to'siq) rasm yoki matn orqali aniqlash tizimi.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
