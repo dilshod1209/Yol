@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisResult, DefectType, Severity, RoadHealth } from "./types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
 const ROAD_ANALYSIS_SCHEMA = {
   type: Type.OBJECT,
