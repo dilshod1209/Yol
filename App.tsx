@@ -7,7 +7,7 @@ import UserProfile from './components/UserProfile';
 import AdminPanel from './components/AdminPanel';
 import LoginForm from './components/LoginForm';
 import { analyzeRoadIssue } from './geminiService';
-import { Report, LocationData, AnalysisResult, RoadHealth, User, UserRole, RouteData, ReportStatus, Notification } from './types';
+import { Report, LocationData, AnalysisResult, RoadHealth, User, UserRole, RouteData, ReportStatus, Notification, DefectType } from './types';
 import { auth, db, storage } from './firebase';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { motion, AnimatePresence } from 'motion/react';
@@ -91,6 +91,9 @@ const App: React.FC = () => {
   const [startSuggestions, setStartSuggestions] = useState<any[]>([]);
   const [endSuggestions, setEndSuggestions] = useState<any[]>([]);
   const [isMapExpanded, setIsMapExpanded] = useState(false);
+  const [manualLocation, setManualLocation] = useState('');
+  const [manualDescription, setManualDescription] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -241,6 +244,22 @@ const App: React.FC = () => {
       if (isDemoAdmin) return; // Don't override demo admin
 
       if (firebaseUser) {
+        // Update online status
+        updateDoc(doc(db, 'users', firebaseUser.uid), { isOnline: true });
+        
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'hidden') {
+            updateDoc(doc(db, 'users', firebaseUser.uid), { isOnline: false });
+          } else {
+            updateDoc(doc(db, 'users', firebaseUser.uid), { isOnline: true });
+          }
+        };
+        const handleBeforeUnload = () => {
+          updateDoc(doc(db, 'users', firebaseUser.uid), { isOnline: false, isCameraActive: false });
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
         // Listen to user document changes in real-time
         const userDocRef = doc(db, 'users', firebaseUser.uid);
         unsubUserDoc = onSnapshot(userDocRef, (docSnap) => {
@@ -258,6 +277,12 @@ const App: React.FC = () => {
           handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
           setIsAuthReady(true);
         });
+
+        return () => {
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+          window.removeEventListener('beforeunload', handleBeforeUnload);
+          unsubUserDoc();
+        };
       } else {
         unsubUserDoc();
         setCurrentUser(null);
@@ -275,11 +300,35 @@ const App: React.FC = () => {
     }
 
     return () => {
+      if (auth.currentUser && !isDemoAdmin) {
+        updateDoc(doc(db, 'users', auth.currentUser.uid), { isOnline: false, isCameraActive: false });
+      }
       unsubscribeAuth();
       unsubUserDoc();
       if (geoId) navigator.geolocation.clearWatch(geoId);
     };
   }, [isDemoAdmin]);
+
+  // Track camera status and notify admin
+  useEffect(() => {
+    if (currentUser && !isDemoAdmin && auth.currentUser) {
+      const isCameraNowActive = activeTab === 'live' && activeView === 'monitor';
+      updateDoc(doc(db, 'users', auth.currentUser.uid), { isCameraActive: isCameraNowActive });
+      
+      if (isCameraNowActive) {
+        // Notify admin about active camera
+        addDoc(collection(db, 'notifications'), {
+          userId: 'admin', // Special ID for admin notifications
+          title: "Kamera faollashtirildi",
+          message: `${currentUser.firstName} ${currentUser.lastName} kamerani yoqdi.`,
+          timestamp: Date.now(),
+          isRead: false,
+          type: 'camera_active',
+          userPhone: currentUser.phone
+        }).catch(err => console.error("Admin notification failed:", err));
+      }
+    }
+  }, [activeTab, activeView, currentUser, isDemoAdmin]);
 
   // Real-time synchronization
   useEffect(() => {
@@ -298,9 +347,13 @@ const App: React.FC = () => {
     });
 
     // Notifications
+    const notificationIds = [currentUser.id, 'global'];
+    if (currentUser.role === UserRole.ADMIN) {
+      notificationIds.push('admin');
+    }
     const notificationsQuery = query(
       collection(db, 'notifications'), 
-      where('userId', 'in', [currentUser.id, 'global']), 
+      where('userId', 'in', notificationIds), 
       orderBy('timestamp', 'desc')
     );
 
@@ -401,8 +454,14 @@ const App: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!manualLocation) {
+      alert("Iltimos, avval joylashuvni kiriting.");
+      return;
+    }
+
     setIsAnalyzing(true);
     setQuotaError(false);
+    setIsUploading(true);
     
     try {
       const reader = new FileReader();
@@ -422,12 +481,17 @@ const App: React.FC = () => {
             userName: `${currentUser.firstName} ${currentUser.lastName}`,
             image: downloadURL,
             location: currentLocation || { lat: 41.2995, lng: 69.2401 },
+            address: manualLocation,
+            description: manualDescription,
             analysis,
             timestamp: Date.now(),
             status: ReportStatus.DRAFT,
             region: currentUser.region || 'Toshkent shahri'
           });
 
+          alert("Rasm yuklandi va tahlil qilindi! Uni profil bo'limidan ko'rishingiz mumkin.");
+          setManualLocation('');
+          setManualDescription('');
         } catch (err: any) {
           if (err.message === "QUOTA_EXHAUSTED") setQuotaError(true);
           else {
@@ -436,17 +500,23 @@ const App: React.FC = () => {
           }
         } finally {
           setIsAnalyzing(false);
+          setIsUploading(false);
         }
       };
       reader.readAsDataURL(file);
     } catch (err) {
       console.error(err);
       setIsAnalyzing(false);
+      setIsUploading(false);
     }
   };
 
   const handleLiveUpdate = async (result: AnalysisResult, frame: string) => {
     setLastAnalysis(result);
+    // Auto-save if defect found
+    if (result.health !== RoadHealth.EXCELLENT && result.type !== DefectType.SMOOTH) {
+      handleSaveReport(result, frame);
+    }
   };
 
   const deleteReport = async (id: string) => {
@@ -712,18 +782,14 @@ const App: React.FC = () => {
                         onClick={() => setActiveTab('live')} 
                         className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'live' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
                       >
-                        <i className="fas fa-video mr-2"></i> Kamerani qo'shish
+                        <i className="fas fa-video mr-2"></i> Kamera
                       </button>
                       <button 
                         onClick={() => setActiveTab('manual')} 
                         className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'manual' ? 'bg-red-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
                       >
-                        <i className="fas fa-video-slash mr-2"></i> O'chirish
+                        <i className="fas fa-cloud-arrow-up mr-2"></i> Fayl Yuklash
                       </button>
-                      <button onClick={() => fileInputRef.current?.click()} className="px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-all">
-                        <i className="fas fa-cloud-arrow-up mr-2"></i> Yuklash
-                      </button>
-                      <input type="file" ref={fileInputRef} onChange={handleManualUpload} className="hidden" accept="image/*" />
                     </div>
                     <div className="flex items-center space-x-4 bg-white/50 px-4 py-2 rounded-2xl border border-slate-200">
                        <div className="flex flex-col text-right">
@@ -736,7 +802,60 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="relative group">
+                  {activeTab === 'manual' && (
+                    <div className="bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-2xl space-y-6 animate-fade-in">
+                      <div className="flex items-center space-x-4 mb-4">
+                        <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center text-red-500">
+                          <i className="fas fa-file-image text-xl"></i>
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">Rasm yuklash orqali tahlil</h3>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Joylashuv va tavsifni kiriting</p>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <div className="relative">
+                          <i className="fas fa-location-dot absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                          <input 
+                            type="text"
+                            placeholder="Yo'l nomi yoki manzil (Masalan: Amir Temur ko'chasi)"
+                            value={manualLocation}
+                            onChange={(e) => setManualLocation(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-5 text-sm text-slate-900 focus:outline-none focus:border-red-500 transition-all font-medium"
+                          />
+                        </div>
+                        <div className="relative">
+                          <i className="fas fa-align-left absolute left-4 top-4 text-slate-400 text-xs"></i>
+                          <textarea 
+                            placeholder="Qo'shimcha tavsif (ixtiyoriy)"
+                            value={manualDescription}
+                            onChange={(e) => setManualDescription(e.target.value)}
+                            rows={3}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-5 text-sm text-slate-900 focus:outline-none focus:border-red-500 transition-all font-medium resize-none"
+                          />
+                        </div>
+                      </div>
+
+                      <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading || !manualLocation}
+                        className="w-full bg-red-600 hover:bg-red-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black py-4 rounded-2xl shadow-lg shadow-red-600/20 transition-all active:scale-95 uppercase tracking-widest text-xs flex items-center justify-center gap-3"
+                      >
+                        {isUploading ? (
+                          <i className="fas fa-spinner fa-spin"></i>
+                        ) : (
+                          <>
+                            <i className="fas fa-cloud-arrow-up"></i>
+                            Rasm tanlash va yuklash
+                          </>
+                        )}
+                      </button>
+                      <input type="file" ref={fileInputRef} onChange={handleManualUpload} className="hidden" accept="image/*" />
+                    </div>
+                  )}
+
+                  <div className={`relative group ${activeTab === 'manual' ? 'hidden' : ''}`}>
                     <LiveVision 
                       isActive={activeTab === 'live'} 
                       onAnalysisUpdate={handleLiveUpdate} 

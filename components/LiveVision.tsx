@@ -210,15 +210,6 @@ const LiveVision: React.FC<LiveVisionProps> = ({ onAnalysisUpdate, onSave, isAct
             </div>
             
             <div className="flex flex-col items-end gap-3">
-              {lastAnalysis && (
-                <button 
-                  onClick={handleManualSave}
-                  className="bg-emerald-600 px-6 py-3 rounded-xl text-white text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-emerald-500 transition-all pointer-events-auto flex items-center gap-2"
-                >
-                  <i className="fas fa-paper-plane"></i>
-                  Adminga yuborish
-                </button>
-              )}
               {isProcessing && (
                 <div className="bg-blue-600 px-6 py-2 rounded-xl text-white text-[10px] font-black uppercase tracking-widest shadow-2xl animate-pulse">
                   Neural Computing...

@@ -48,6 +48,8 @@ export interface User {
   region: string;
   district: string;
   isBlocked?: boolean;
+  isOnline?: boolean;
+  isCameraActive?: boolean;
   createdAt: number;
 }
 

@@ -28,7 +28,10 @@ service cloud.firestore {
              data.region is string &&
              data.district is string &&
              data.role in ['USER', 'ADMIN'] &&
-             data.createdAt is number;
+             data.createdAt is number &&
+             (!('isOnline' in data) || (data.isOnline is bool)) &&
+             (!('isCameraActive' in data) || (data.isCameraActive is bool)) &&
+             (!('isBlocked' in data) || (data.isBlocked is bool));
     }
 
     function isValidReport(data) {
@@ -38,7 +41,9 @@ service cloud.firestore {
              data.analysis is map &&
              data.status in ['Qoralama', 'Yuborilgan', 'Ko\'rib chiqilmoqda', 'Ta\'mirlanmoqda', 'Tuzatilgan', 'Rad etilgan'] &&
              data.timestamp is number &&
-             data.region is string;
+             data.region is string &&
+             (!('address' in data) || (data.address is string)) &&
+             (!('description' in data) || (data.description is string));
     }
 
     // ===============================================================
@@ -60,9 +65,9 @@ service cloud.firestore {
     }
 
     match /notifications/{notificationId} {
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == 'global');
-      allow create: if isAdmin();
-      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == 'global') && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == 'global' || (isAdmin() && resource.data.userId == 'admin'));
+      allow create: if isAdmin() || (isAuthenticated() && request.resource.data.userId == 'admin');
+      allow update: if isAdmin() || (isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == 'global') && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']));
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
     }
 

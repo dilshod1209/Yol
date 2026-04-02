@@ -702,19 +702,24 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               <span className="bg-blue-50 text-blue-600 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Global</span>
             </div>
             <div className="space-y-4 overflow-y-auto max-h-[600px] pr-2 custom-scrollbar">
-              {notifications.filter(n => n.userId === 'global').length === 0 ? (
+              {notifications.filter(n => n.userId === 'global' || n.userId === 'admin').length === 0 ? (
                 <div className="p-12 text-center text-slate-300">
                   <i className="fas fa-history text-4xl mb-4 opacity-20"></i>
                   <p className="text-[10px] font-black uppercase tracking-widest">Hozircha yuborilgan xabarlar yo'q</p>
                 </div>
               ) : (
-                notifications.filter(n => n.userId === 'global').map(notif => (
-                  <div key={notif.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 animate-fade-in">
+                notifications.filter(n => n.userId === 'global' || n.userId === 'admin').map(notif => (
+                  <div key={notif.id} className={`p-6 rounded-3xl border animate-fade-in ${notif.userId === 'admin' ? 'bg-red-50 border-red-100' : 'bg-slate-50 border-slate-100'}`}>
                     <div className="flex justify-between items-start mb-2">
-                      <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">{notif.title}</h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">{notif.title}</h4>
+                        {notif.userId === 'admin' && (
+                          <span className="bg-red-600 text-white text-[6px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest">Tizim</span>
+                        )}
+                      </div>
                       <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(notif.timestamp).toLocaleString()}</span>
                     </div>
-                    <p className="text-[10px] text-slate-600 leading-relaxed">{notif.message}</p>
+                    <p className="text-[10px] text-slate-600 leading-relaxed font-medium">{notif.message}</p>
                   </div>
                 ))
               )}
@@ -973,13 +978,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                   <th className="p-6">Foydalanuvchi</th>
                   <th className="p-6">Viloyat / Tuman</th>
                   <th className="p-6">Telefon / ID</th>
+                  <th className="p-6">Holat</th>
                   <th className="p-6 text-right">Amallar</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="p-12 text-center text-slate-300">
+                    <td colSpan={5} className="p-12 text-center text-slate-300">
                       <p className="font-black uppercase tracking-[0.2em] text-[10px]">Foydalanuvchilar topilmadi</p>
                     </td>
                   </tr>
@@ -988,6 +994,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     <tr key={user.id} className="hover:bg-blue-50/50 transition-all">
                       <td className="p-6">
                         <div className="flex items-center space-x-4">
+                          <div className={`w-2 h-2 rounded-full ${user.isOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-300'}`}></div>
                           <div>
                             <p className="text-sm font-black text-slate-900">{user.firstName} {user.lastName}</p>
                             <p className="text-[9px] text-slate-400 font-black">{user.email}</p>
@@ -1001,6 +1008,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                       <td className="p-6">
                          <p className="text-xs font-black text-blue-600">{user.phone}</p>
                          <p className="text-[9px] text-slate-400 uppercase font-bold">{user.personalCode}</p>
+                      </td>
+                      <td className="p-6">
+                        <div className="flex flex-col space-y-1">
+                          <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase w-fit ${user.isOnline ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>
+                            {user.isOnline ? 'Online' : 'Offline'}
+                          </span>
+                          {user.isCameraActive && (
+                            <span className="text-[8px] font-black px-2 py-0.5 rounded uppercase w-fit bg-red-50 text-red-600 animate-pulse">
+                              <i className="fas fa-video mr-1"></i> Kamera Aktiv
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="p-6 text-right">
                         <div className="flex justify-end space-x-2">
