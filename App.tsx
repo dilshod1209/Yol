@@ -441,8 +441,10 @@ const App: React.FC = () => {
     }
     try {
       await updateDoc(doc(db, 'reports', id), { status: ReportStatus.SUBMITTED });
+      alert("Hisobot muvaffaqiyatli yuborildi! Endi uni admin ko'ra oladi.");
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `reports/${id}`);
+      alert("Hisobotni yuborishda xatolik yuz berdi.");
     }
   };
 
@@ -513,10 +515,8 @@ const App: React.FC = () => {
 
   const handleLiveUpdate = async (result: AnalysisResult, frame: string) => {
     setLastAnalysis(result);
-    // Auto-save if defect found
-    if (result.health !== RoadHealth.EXCELLENT && result.type !== DefectType.SMOOTH) {
-      handleSaveReport(result, frame);
-    }
+    // Save every analysis result to profile as requested
+    handleSaveReport(result, frame);
   };
 
   const deleteReport = async (id: string) => {
@@ -526,8 +526,10 @@ const App: React.FC = () => {
     }
     try {
       await deleteDoc(doc(db, 'reports', id));
+      alert("Hisobot o'chirildi.");
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `reports/${id}`);
+      alert("Hisobotni o'chirishda xatolik.");
     }
   };
 
