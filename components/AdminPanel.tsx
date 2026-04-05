@@ -1,22 +1,24 @@
 
 import React, { useState, useMemo } from 'react';
-import { Report, ReportStatus, User, Severity, RoadHealth, DefectType } from '../types';
+import { Report, ReportStatus, User, Severity, RoadHealth, DefectType, UserRole, LocationData, Notification as AppNotification } from '../types';
 import MapDisplay from './MapDisplay';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useLanguage } from '../src/lib/LanguageContext';
 
 interface AdminPanelProps {
   allReports: Report[];
   onDelete: (id: string) => void;
   onUpdateStatus: (id: string, status: ReportStatus) => void;
   users: User[];
-  onToggleBlock: (id: string) => void;
-  onDeleteUser: (id: string) => void;
+  onToggleBlock: (userId: string, isBlocked: boolean) => void;
+  onDeleteUser: (userId: string) => void;
   onSendGlobalNotification: (title: string, message: string) => Promise<void>;
-  currentLocation: { lat: number, lng: number } | null;
-  notifications: Notification[];
+  currentLocation: LocationData | null;
+  notifications: AppNotification[];
+  currentUser: User | null;
 }
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ 
@@ -28,10 +30,45 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   onDeleteUser,
   onSendGlobalNotification,
   currentLocation,
-  notifications
+  notifications,
+  currentUser
 }) => {
+  const { t } = useLanguage();
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'users' | 'analytics' | 'regions' | 'notifications'>('dashboard');
+
+  const statusTranslationKeys: Record<string, string> = {
+    [ReportStatus.DRAFT]: 'draft',
+    [ReportStatus.SUBMITTED]: 'submitted',
+    [ReportStatus.UNDER_REVIEW]: 'underReview',
+    [ReportStatus.IN_REPAIR]: 'inRepair',
+    [ReportStatus.FIXED]: 'fixed',
+    [ReportStatus.REJECTED]: 'rejected',
+  };
+
+  const severityTranslationKeys: Record<string, string> = {
+    [Severity.LOW]: 'low',
+    [Severity.MEDIUM]: 'medium',
+    [Severity.HIGH]: 'high',
+    [Severity.NONE]: 'none',
+  };
+
+  const defectTypeTranslationKeys: Record<string, string> = {
+    [DefectType.POTHOLE]: 'pothole',
+    [DefectType.CRACK]: 'crack',
+    [DefectType.OBSTACLE]: 'obstacle',
+    [DefectType.FADED_MARKINGS]: 'fadedMarkings',
+    [DefectType.SMOOTH]: 'smooth',
+    [DefectType.UNKNOWN]: 'unknown',
+  };
+
+  const roadHealthTranslationKeys: Record<string, string> = {
+    [RoadHealth.EXCELLENT]: 'excellent',
+    [RoadHealth.GOOD]: 'good',
+    [RoadHealth.FAIR]: 'fair',
+    [RoadHealth.POOR]: 'poor',
+  };
+
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'users' | 'analytics' | 'regions' | 'notifications' | 'upload'>('dashboard');
   const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
   const [mapCenter, setMapCenter] = useState<Location | null>(null);
   const [reportFilter, setReportFilter] = useState<{ status: string; severity: string; region: string; search: string }>({
@@ -146,7 +183,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     });
 
-    return Object.entries(statusCounts).map(([name, value]) => ({ name, value }));
+    return Object.entries(statusCounts).map(([name, value]) => ({ 
+      name: t(`common.${statusTranslationKeys[name]}`), 
+      value 
+    }));
   }, [filteredReports]);
 
   const severityData = useMemo(() => {
@@ -154,7 +194,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     filteredReports.forEach(r => {
       counts[r.analysis.severity]++;
     });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+    return Object.entries(counts).map(([name, value]) => ({ 
+      name: t(`common.${severityTranslationKeys[name]}`), 
+      value 
+    }));
   }, [filteredReports]);
 
   const COLORS = ['#3b82f6', '#f59e0b', '#8b5cf6', '#10b981', '#ef4444'];
@@ -163,10 +206,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const exportToPDF = () => {
     const doc = new jsPDF();
     doc.setFontSize(20);
-    doc.text("Yo'l Nosozliklari Hisoboti", 20, 20);
+    doc.text(t('common.roadReport'), 20, 20);
     doc.setFontSize(12);
-    doc.text(`Sana: ${new Date().toLocaleDateString()}`, 20, 30);
-    doc.text(`Jami xabarlar: ${filteredReports.length}`, 20, 40);
+    doc.text(`${t('common.date')}: ${new Date().toLocaleDateString()}`, 20, 30);
+    doc.text(`${t('common.totalMessages')}: ${filteredReports.length}`, 20, 40);
     
     let y = 60;
     filteredReports.slice(0, 15).forEach((r, i) => {
@@ -174,7 +217,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         doc.addPage();
         y = 20;
       }
-      doc.text(`${i+1}. ${r.analysis.type} - ${r.status} (${r.region || 'Noma\'lum'})`, 20, y);
+      doc.text(`${i+1}. ${t(`common.${defectTypeTranslationKeys[r.analysis.type]}`)} - ${t(`common.${statusTranslationKeys[r.status]}`)} (${r.region || t('common.unknownRegion')})`, 20, y);
       y += 10;
     });
     
@@ -184,13 +227,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const exportToExcel = () => {
     const data = filteredReports.map(r => ({
       ID: r.id,
-      Foydalanuvchi: r.userName,
-      Turi: r.analysis.type,
-      Holati: r.status,
-      Viloyat: r.region,
-      Xarajat: r.analysis.estimatedCost,
-      Vaqt: r.analysis.estimatedTime,
-      Sana: new Date(r.timestamp).toLocaleString()
+      [t('common.name')]: r.userName,
+      [t('common.type')]: t(`common.${defectTypeTranslationKeys[r.analysis.type]}`),
+      [t('common.status')]: t(`common.${statusTranslationKeys[r.status]}`),
+      [t('common.region')]: r.region || t('common.unknownRegion'),
+      [t('common.estimatedCost')]: r.analysis.estimatedCost,
+      [t('common.repairTime')]: r.analysis.estimatedTime,
+      [t('common.date')]: new Date(r.timestamp).toLocaleString()
     }));
     
     const ws = XLSX.utils.json_to_sheet(data);
@@ -222,7 +265,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 <img src={selectedReport.image} className="w-full h-full object-cover" />
                 <div className="absolute top-6 left-6 bg-white/90 backdrop-blur-md px-4 py-2 rounded-2xl border border-white shadow-xl">
                   <span className={`text-[10px] font-black uppercase tracking-widest ${selectedReport.analysis.severity === Severity.HIGH ? 'text-red-600' : 'text-blue-600'}`}>
-                    {selectedReport.analysis.severity} Xavf
+                    {t(`common.${severityTranslationKeys[selectedReport.analysis.severity]}`)} {t('common.risk')}
                   </span>
                 </div>
                 {selectedReport.analysis.boundingBox && (
@@ -240,7 +283,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="md:w-1/2 p-8 md:p-12 overflow-y-auto custom-scrollbar">
                 <div className="flex justify-between items-start mb-8">
                   <div>
-                    <h3 className="text-3xl font-black text-slate-900 tracking-tight uppercase leading-none mb-2">{selectedReport.analysis.type}</h3>
+                    <h3 className="text-3xl font-black text-slate-900 tracking-tight uppercase leading-none mb-2">{t(`common.${defectTypeTranslationKeys[selectedReport.analysis.type]}`)}</h3>
                     <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest">ID: {selectedReport.id.slice(0, 8)}</p>
                   </div>
                   <button onClick={() => setSelectedReport(null)} className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-400 hover:text-slate-900 transition-all">
@@ -250,18 +293,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
                 <div className="grid grid-cols-2 gap-4 mb-8">
                   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Joylashuv</p>
+                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">{t('common.regions')}</p>
                     <p className="text-[10px] font-bold text-slate-900">{selectedReport.region}</p>
                   </div>
                   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Sana</p>
+                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">{t('common.date')}</p>
                     <p className="text-[10px] font-bold text-slate-900">{new Date(selectedReport.timestamp).toLocaleDateString()}</p>
                   </div>
                 </div>
 
                 <div className="space-y-6 mb-8">
                   <div>
-                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Tahlil va Tavsif</h4>
+                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">{t('common.analytics')}</h4>
                     <p className="text-sm text-slate-600 leading-relaxed font-medium">{selectedReport.analysis.description}</p>
                   </div>
                   <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
@@ -297,7 +340,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     </table>
                   </div>
                   <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-center justify-between">
-                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Taxminiy Maydon:</span>
+                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{t('common.estimatedArea')}:</span>
                     <span className="text-sm font-black text-emerald-700">{selectedReport.analysis.estimatedArea} m²</span>
                   </div>
                 </div>
@@ -308,7 +351,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     className="flex-1 bg-blue-600 text-white rounded-2xl py-4 px-6 text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg flex items-center justify-center gap-2"
                   >
                     <i className="fas fa-map-location-dot"></i>
-                    Xaritada ko'rish
+                    {t('common.monitoring')}
                   </button>
                   <select 
                     value={selectedReport.status}
@@ -316,7 +359,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     className="flex-1 bg-slate-900 text-white rounded-2xl py-4 px-6 text-xs font-black uppercase tracking-widest focus:outline-none"
                   >
                     {Object.values(ReportStatus).map(status => (
-                      <option key={status} value={status}>{status}</option>
+                      <option key={status} value={status}>{t(`common.${statusTranslationKeys[status]}`)}</option>
                     ))}
                   </select>
                   <button 
@@ -336,19 +379,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <div>
           <h2 className="text-3xl font-black text-slate-900 tracking-tight uppercase flex items-center">
             <i className="fas fa-shield-halved mr-4 text-blue-600"></i>
-            Boshqaruv Paneli
+            {t('common.adminPanel')}
           </h2>
-          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">Tizim xavfsizligi va yo'l holati nazorati</p>
+          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">{t('common.systemSecurity')}</p>
         </div>
         <div className="flex flex-wrap gap-4">
           <button onClick={exportMonthlyReport} className="bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm">
-            <i className="fas fa-calendar-check mr-2"></i> Monthly Report
+            <i className="fas fa-calendar-check mr-2"></i> {t('common.monthlyReport')}
           </button>
           <button onClick={exportToPDF} className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm">
-            <i className="fas fa-file-pdf mr-2"></i> PDF Export
+            <i className="fas fa-file-pdf mr-2"></i> {t('common.pdfExport')}
           </button>
           <button onClick={exportToExcel} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border border-emerald-200 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm">
-            <i className="fas fa-file-excel mr-2"></i> Excel Export
+            <i className="fas fa-file-excel mr-2"></i> {t('common.excelExport')}
           </button>
         </div>
       </div>
@@ -359,37 +402,45 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           onClick={() => setActiveTab('dashboard')}
           className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
         >
-          Dashboard
+          {t('common.dashboard')}
         </button>
         <button 
           onClick={() => setActiveTab('reports')}
           className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'reports' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
         >
-          Hisobotlar
+          {t('common.reports')}
         </button>
         <button 
           onClick={() => setActiveTab('regions')}
           className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'regions' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
         >
-          Hududlar
+          {t('common.regions')}
         </button>
-        <button 
-          onClick={() => setActiveTab('users')}
-          className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'users' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          Foydalanuvchilar
-        </button>
+        {(currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN || currentUser?.role === UserRole.MODERATOR) && (
+          <button 
+            onClick={() => setActiveTab('users')}
+            className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'users' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            {t('common.users')}
+          </button>
+        )}
         <button 
           onClick={() => setActiveTab('analytics')}
           className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'analytics' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
         >
-          Analitika
+          {t('common.analytics')}
         </button>
         <button 
           onClick={() => setActiveTab('notifications')}
           className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'notifications' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
         >
-          Bildirishnomalar
+          {t('common.notifications')}
+        </button>
+        <button 
+          onClick={() => setActiveTab('upload')}
+          className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'upload' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
+        >
+          {t('common.fileUpload')}
         </button>
       </div>
 
@@ -397,48 +448,48 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <div className="space-y-8">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <div className="bg-gradient-to-br from-blue-600 to-blue-700 p-8 rounded-[2.5rem] text-white shadow-xl">
-              <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-2">Jami Hisobotlar</p>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-2">{t('common.totalReports')}</p>
               <h3 className="text-4xl font-black">{stats.totalReports}</h3>
               <div className="mt-4 flex items-center text-[10px] font-bold">
-                <i className="fas fa-arrow-up mr-2"></i> 12% o'sish
+                <i className="fas fa-arrow-up mr-2"></i> 12% {t('common.growth')}
               </div>
             </div>
             <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Tuzatilgan</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">{t('common.fixed')}</p>
               <h3 className="text-4xl font-black text-slate-900">{stats.fixedReports}</h3>
               <div className="mt-4 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
                 <div className="bg-emerald-500 h-full" style={{ width: `${(stats.fixedReports / stats.totalReports) * 100}%` }}></div>
               </div>
             </div>
             <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Yuqori Xavf</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">{t('common.highRisk')}</p>
               <h3 className="text-4xl font-black text-red-500">{stats.highRisk}</h3>
-              <p className="mt-4 text-[10px] font-bold text-slate-400 uppercase">Tezkor chora zarur</p>
+              <p className="mt-4 text-[10px] font-bold text-slate-400 uppercase">{t('common.urgentAction')}</p>
             </div>
             <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Aktiv Foydalanuvchilar</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">{t('common.users')}</p>
               <h3 className="text-4xl font-black text-slate-900">{users.length}</h3>
-              <p className="mt-4 text-[10px] font-bold text-slate-400 uppercase">Jami ro'yxatdan o'tgan</p>
+              <p className="mt-4 text-[10px] font-bold text-slate-400 uppercase">{t('common.totalRegistered')}</p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2 space-y-6">
-              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">So'nggi Nosozliklar</h3>
+              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">{t('common.history')}</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {recentReports.map(report => (
                   <div key={report.id} className="bg-white p-4 rounded-3xl border border-slate-200 flex space-x-4 hover:border-blue-500/30 transition-all shadow-sm">
                     <img src={report.image} className="w-24 h-24 rounded-2xl object-cover border border-slate-100" />
                     <div className="flex-1">
                       <div className="flex justify-between items-start">
-                        <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">{report.analysis.type}</h4>
+                        <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">{t(`common.${defectTypeTranslationKeys[report.analysis.type]}`)}</h4>
                         <div className="flex flex-col items-end gap-1">
                           <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${report.analysis.severity === Severity.HIGH ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-500'}`}>
-                            {report.analysis.severity}
+                            {t(`common.${severityTranslationKeys[report.analysis.severity]}`)}
                           </span>
                           {(report.analysis.severity === Severity.HIGH || report.analysis.health === RoadHealth.POOR) && (
                             <span className="text-[7px] font-black text-slate-400 uppercase tracking-tighter">
-                              Reporter: {report.userName}
+                              {t('common.users')}: {report.userName}
                             </span>
                           )}
                         </div>
@@ -453,8 +504,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
             <div className="space-y-6">
               <div className="flex justify-between items-center">
-                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Hududlar</h3>
-                <button onClick={() => setActiveTab('regions')} className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline">Hammasi</button>
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">{t('common.regions')}</h3>
+                <button onClick={() => setActiveTab('regions')} className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline">{t('common.all')}</button>
               </div>
               <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm">
                 <div className="space-y-6">
@@ -484,7 +535,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <div className="space-y-8 animate-slide-up">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div className="lg:col-span-4 space-y-4">
-              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight mb-6">Viloyatlar Ro'yxati</h3>
+              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight mb-6">{t('common.regions')}</h3>
               <div className="bg-white border border-slate-200 rounded-[2.5rem] p-4 shadow-sm max-h-[600px] overflow-y-auto">
                 {stats.regionStats.map((r: any) => (
                   <button
@@ -630,28 +681,28 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 <i className="fas fa-bullhorn text-xl"></i>
               </div>
               <div>
-                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Global Bildirishnoma</h3>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Barcha foydalanuvchilarga xabar yuborish</p>
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">{t('common.notifications')}</h3>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">{t('common.send')} {t('common.all')}</p>
               </div>
             </div>
 
             <div className="space-y-6">
               <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block ml-2">Xabar Sarlavhasi</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block ml-2">{t('common.status')}</label>
                 <input 
                   type="text" 
                   value={notifTitle}
                   onChange={(e) => setNotifTitle(e.target.value)}
-                  placeholder="Masalan: Tizim yangilanishi"
+                  placeholder={t('common.status')}
                   className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-6 text-sm text-slate-900 focus:outline-none focus:border-blue-600 transition-all font-medium"
                 />
               </div>
               <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block ml-2">Xabar Matni</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block ml-2">{t('common.reports')}</label>
                 <textarea 
                   value={notifMessage}
                   onChange={(e) => setNotifMessage(e.target.value)}
-                  placeholder="Xabar mazmunini bu yerga yozing..."
+                  placeholder={t('common.reports')}
                   rows={5}
                   className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-6 text-sm text-slate-900 focus:outline-none focus:border-blue-600 transition-all font-medium resize-none"
                 ></textarea>
@@ -675,12 +726,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 {isSending ? (
                   <>
                     <i className="fas fa-spinner fa-spin"></i>
-                    <span>Yuborilmoqda...</span>
+                    <span>{t('common.analyzing')}</span>
                   </>
                 ) : (
                   <>
                     <i className="fas fa-paper-plane"></i>
-                    <span>Barchaga Yuborish</span>
+                    <span>{t('common.send')}</span>
                   </>
                 )}
               </button>
@@ -690,7 +741,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="flex space-x-3">
                 <i className="fas fa-circle-info text-amber-500 mt-1"></i>
                 <p className="text-[10px] text-amber-700 font-bold leading-relaxed uppercase tracking-tight">
-                  Diqqat: Ushbu xabar tizimdagi barcha ro'yxatdan o'tgan foydalanuvchilarga yuboriladi. Iltimos, ma'lumotlar to'g'riligini tekshiring.
+                  {t('common.notifications')} {t('common.all')}. {t('common.noDefects')}
                 </p>
               </div>
             </div>
@@ -698,14 +749,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
           <div className="bg-white border border-slate-200 rounded-[2.5rem] p-10 shadow-sm overflow-hidden flex flex-col">
             <div className="flex items-center justify-between mb-8">
-              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Xabarlar Tarixi</h3>
-              <span className="bg-blue-50 text-blue-600 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Global</span>
+              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">{t('common.history')}</h3>
+              <span className="bg-blue-50 text-blue-600 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">{t('common.global')}</span>
             </div>
             <div className="space-y-4 overflow-y-auto max-h-[600px] pr-2 custom-scrollbar">
               {notifications.filter(n => n.userId === 'global' || n.userId === 'admin').length === 0 ? (
                 <div className="p-12 text-center text-slate-300">
                   <i className="fas fa-history text-4xl mb-4 opacity-20"></i>
-                  <p className="text-[10px] font-black uppercase tracking-widest">Hozircha yuborilgan xabarlar yo'q</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest">{t('common.noDefects')}</p>
                 </div>
               ) : (
                 notifications.filter(n => n.userId === 'global' || n.userId === 'admin').map(notif => (
@@ -714,7 +765,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                       <div className="flex items-center gap-2">
                         <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">{notif.title}</h4>
                         {notif.userId === 'admin' && (
-                          <span className="bg-red-600 text-white text-[6px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest">Tizim</span>
+                          <span className="bg-red-600 text-white text-[6px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest">{t('common.system')}</span>
                         )}
                       </div>
                       <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(notif.timestamp).toLocaleString()}</span>
@@ -736,7 +787,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                   <i className="fas fa-database text-2xl"></i>
                </div>
                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Jami xabarlar</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('common.totalReports')}</p>
                   <p className="text-2xl font-black text-slate-900">{stats.totalReports}</p>
                </div>
             </div>
@@ -745,7 +796,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                   <i className="fas fa-check-double text-2xl"></i>
                </div>
                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tuzatilgan</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('common.fixed')}</p>
                   <p className="text-2xl font-black text-slate-900">{stats.fixedReports}</p>
                </div>
             </div>
@@ -754,7 +805,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                   <i className="fas fa-radiation text-2xl animate-pulse"></i>
                </div>
                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Yuqori Xavf</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('common.highRisk')}</p>
                   <p className="text-2xl font-black text-slate-900">{stats.highRisk}</p>
                </div>
             </div>
@@ -763,7 +814,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                   <i className="fas fa-users text-2xl"></i>
                </div>
                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Foydalanuvchilar</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('common.users')}</p>
                   <p className="text-2xl font-black text-slate-900">{stats.totalUsers}</p>
                </div>
             </div>
@@ -772,8 +823,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mt-8">
             <div className="lg:col-span-8 h-[500px] bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden relative shadow-sm">
                <div className="absolute top-6 left-6 z-10 bg-white/80 backdrop-blur-md p-4 rounded-2xl border border-slate-100 shadow-xl">
-                  <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest mb-1">O'zbekiston Yo'l Xaritasi</h4>
-                  <p className="text-[8px] text-slate-400 font-bold uppercase">Barcha xabarlar joylashuvi</p>
+                  <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest mb-1">{t('common.regions')}</h4>
+                  <p className="text-[8px] text-slate-400 font-bold uppercase">{t('common.all')} {t('common.reports')}</p>
                </div>
                <div className="w-full h-full">
                   {filteredReports.length > 0 && filteredReports[0].location ? (
@@ -783,7 +834,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-slate-300 font-black uppercase text-xs tracking-widest">
-                       Joylashuv ma'lumotlari mavjud emas
+                       {t('common.noDefects')}
                     </div>
                   )}
                </div>
@@ -793,7 +844,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm">
                   <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-4 flex items-center">
                      <i className="fas fa-location-dot mr-2 text-blue-600"></i>
-                     Hududlar bo'yicha
+                     {t('common.regions')}
                   </h4>
                   <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                      {stats.regionStats.map((r: any) => (
@@ -808,7 +859,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                {selectedReport && (
                  <div className="bg-white p-6 rounded-[2rem] border border-blue-200 animate-fade-in shadow-xl">
                     <div className="flex justify-between items-start mb-4">
-                       <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">Batafsil Ma'lumot</h4>
+                       <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">{t('common.reportDetails')}</h4>
                        <button onClick={() => setSelectedReport(null)} className="text-slate-400 hover:text-slate-600"><i className="fas fa-times"></i></button>
                     </div>
                     <img src={selectedReport.image} className="w-full h-32 object-cover rounded-xl mb-4 border border-slate-100" />
@@ -822,9 +873,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
                     <div className="space-y-3">
                        <div>
-                          <p className="text-[8px] font-black text-slate-400 uppercase">Joylashuv (Manzil)</p>
+                          <p className="text-[8px] font-black text-slate-400 uppercase">{t('common.roadName')}</p>
                           <p className="text-[10px] text-slate-900 font-bold mb-2">{selectedReport.location.address || `${selectedReport.location.lat.toFixed(4)}, ${selectedReport.location.lng.toFixed(4)}`}</p>
-                          <p className="text-[8px] font-black text-slate-400 uppercase">Tavsif</p>
+                          <p className="text-[8px] font-black text-slate-400 uppercase">{t('common.description')}</p>
                           <p className="text-[10px] text-slate-600 leading-relaxed">{selectedReport.analysis.description}</p>
                        </div>
                     </div>
@@ -835,14 +886,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
           <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm mt-8">
             <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-               <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Barcha Hisobotlar</h3>
+               <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">{t('common.reports')} {t('common.dashboard')}</h3>
                <div className="flex flex-wrap gap-2 w-full md:w-auto">
                   <div className="relative flex-grow md:flex-grow-0">
                     <input 
                       type="text"
                       value={reportFilter.search}
                       onChange={(e) => setReportFilter(prev => ({ ...prev, search: e.target.value }))}
-                      placeholder="Qidirish..."
+                      placeholder={t('common.search') + "..."}
                       className="bg-white border border-slate-200 text-[10px] font-bold text-slate-600 rounded-lg pl-8 pr-3 py-2 w-full focus:outline-none focus:border-blue-500"
                     />
                     <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]"></i>
@@ -852,9 +903,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     onChange={(e) => setReportFilter(prev => ({ ...prev, status: e.target.value }))}
                     className="bg-white border border-slate-200 text-[9px] font-black uppercase text-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
                   >
-                    <option value="all">Barcha Holatlar</option>
+                    <option value="all">{t('common.all')} {t('common.status')}</option>
                     {Object.values(ReportStatus).map(status => (
-                      <option key={status} value={status}>{status}</option>
+                      <option key={status} value={status}>{t(`common.${statusTranslationKeys[status]}`)}</option>
                     ))}
                   </select>
                   <select 
@@ -862,9 +913,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     onChange={(e) => setReportFilter(prev => ({ ...prev, severity: e.target.value }))}
                     className="bg-white border border-slate-200 text-[9px] font-black uppercase text-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
                   >
-                    <option value="all">Barcha Xavflar</option>
+                    <option value="all">{t('common.all')} {t('common.highRisk')}</option>
                     {Object.values(Severity).map(sev => (
-                      <option key={sev} value={sev}>{sev}</option>
+                      <option key={sev} value={sev}>{t(`common.${severityTranslationKeys[sev]}`)}</option>
                     ))}
                   </select>
                   <select 
@@ -872,7 +923,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     onChange={(e) => setReportFilter(prev => ({ ...prev, region: e.target.value }))}
                     className="bg-white border border-slate-200 text-[9px] font-black uppercase text-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
                   >
-                    <option value="all">Barcha Hududlar</option>
+                    <option value="all">{t('common.all')} {t('common.regions')}</option>
                     {stats.regionStats.map(r => (
                       <option key={r.region} value={r.region}>{r.region}</option>
                     ))}
@@ -882,17 +933,17 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             
             {displayReports.length === 0 ? (
               <div className="p-32 text-center text-slate-300">
-                <p className="font-black uppercase tracking-[0.2em] text-[10px]">Filtrga mos ma'lumotlar topilmadi</p>
+                <p className="font-black uppercase tracking-[0.2em] text-[10px]">{t('common.noDefects')}</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
-                      <th className="p-6">Reporter</th>
-                      <th className="p-6">Nosozlik</th>
-                      <th className="p-6">Viloyat</th>
-                      <th className="p-6 text-right">Amallar</th>
+                      <th className="p-6">{t('common.users')}</th>
+                      <th className="p-6">{t('common.reports')}</th>
+                      <th className="p-6">{t('common.region')}</th>
+                      <th className="p-6 text-right">{t('common.actions')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -905,7 +956,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                 <p className="text-sm font-black text-slate-900">{report.userName}</p>
                                 {(report.analysis.severity === Severity.HIGH || report.analysis.health === RoadHealth.POOR) && (
                                   <span className="bg-red-500 text-white text-[6px] font-black px-1 py-0.5 rounded uppercase tracking-tighter animate-pulse">
-                                    High Risk
+                                    {t('common.highRisk')}
                                   </span>
                                 )}
                               </div>
@@ -916,7 +967,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                         <td className="p-6">
                           <div className="flex items-center space-x-3">
                              <img src={report.image} className="w-10 h-10 rounded-lg object-cover border border-slate-100" />
-                             <span className="text-xs font-bold text-slate-600">{report.analysis.type}</span>
+                             <span className="text-xs font-bold text-slate-600">{t(`common.${defectTypeTranslationKeys[report.analysis.type]}`)}</span>
                           </div>
                         </td>
                         <td className="p-6">
@@ -930,7 +981,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                               className="bg-white border border-slate-200 text-[9px] font-black uppercase text-slate-600 rounded-lg px-2 py-1 focus:outline-none focus:border-blue-500"
                             >
                               {Object.values(ReportStatus).map(status => (
-                                <option key={status} value={status}>{status}</option>
+                                <option key={status} value={status}>{t(`common.${statusTranslationKeys[status]}`)}</option>
                               ))}
                             </select>
                             <button 
@@ -959,13 +1010,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       {activeTab === 'users' && (
         <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm">
           <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Foydalanuvchilar Boshqaruvi</h3>
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">{t('common.users')} {t('common.dashboard')}</h3>
             <div className="relative w-full md:w-64">
               <input 
                 type="text"
                 value={userSearch}
                 onChange={(e) => setUserSearch(e.target.value)}
-                placeholder="Foydalanuvchini qidirish..."
+                placeholder={t('common.search') + "..."}
                 className="w-full bg-white border border-slate-200 text-[10px] font-bold text-slate-600 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:border-blue-500"
               />
               <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]"></i>
@@ -975,18 +1026,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
-                  <th className="p-6">Foydalanuvchi</th>
-                  <th className="p-6">Viloyat / Tuman</th>
-                  <th className="p-6">Telefon / ID</th>
-                  <th className="p-6">Holat</th>
-                  <th className="p-6 text-right">Amallar</th>
+                  <th className="p-6">{t('common.users')}</th>
+                  <th className="p-6">{t('common.region')} / {t('common.district')}</th>
+                  <th className="p-6">{t('common.phone')} / ID</th>
+                  <th className="p-6">{t('common.status')}</th>
+                  <th className="p-6 text-right">{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredUsers.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="p-12 text-center text-slate-300">
-                      <p className="font-black uppercase tracking-[0.2em] text-[10px]">Foydalanuvchilar topilmadi</p>
+                      <p className="font-black uppercase tracking-[0.2em] text-[10px]">{t('common.noDefects')}</p>
                     </td>
                   </tr>
                 ) : (
@@ -1012,11 +1063,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                       <td className="p-6">
                         <div className="flex flex-col space-y-1">
                           <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase w-fit ${user.isOnline ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>
-                            {user.isOnline ? 'Online' : 'Offline'}
+                            {user.isOnline ? t('common.online') : t('common.offline')}
                           </span>
                           {user.isCameraActive && (
                             <span className="text-[8px] font-black px-2 py-0.5 rounded uppercase w-fit bg-red-50 text-red-600 animate-pulse">
-                              <i className="fas fa-video mr-1"></i> Kamera Aktiv
+                              <i className="fas fa-video mr-1"></i> {t('common.camera')} Aktiv
                             </span>
                           )}
                         </div>
@@ -1026,13 +1077,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                           <button 
                             onClick={() => onToggleBlock(user.id)}
                             className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all ${user.isBlocked ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
-                            title={user.isBlocked ? "Blokdan chiqarish" : "Bloklash"}
+                            title={user.isBlocked ? t('common.all') : t('common.highRisk')}
                           >
                             <i className={`fas ${user.isBlocked ? 'fa-user-check' : 'fa-user-slash'}`}></i>
                           </button>
                           <button 
                             onClick={() => onDeleteUser(user.id)}
                             className="w-10 h-10 flex items-center justify-center text-slate-400 hover:bg-red-50 hover:text-red-600 rounded-xl transition-all"
+                            title={t('common.delete')}
                           >
                             <i className="fas fa-user-minus"></i>
                           </button>
@@ -1050,7 +1102,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <div className="space-y-8 animate-slide-up">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">Xabarlar Holati (Status)</h3>
+              <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">{t('common.status')}</h3>
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -1077,7 +1129,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
 
             <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">Xavflilik Darajasi</h3>
+              <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">{t('common.highRisk')}</h3>
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -1105,7 +1157,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
 
           <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-            <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">Viloyatlar bo'yicha faollik</h3>
+            <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">{t('common.regions')}</h3>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={stats.regionStats}>
@@ -1127,6 +1179,25 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               </ResponsiveContainer>
             </div>
           </div>
+        </div>
+      )}
+      {activeTab === 'upload' && (
+        <div className="bg-white border border-slate-200 p-12 rounded-[3rem] shadow-xl flex flex-col items-center justify-center min-h-[500px]">
+          <div className="w-24 h-24 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 mb-8">
+            <i className="fas fa-cloud-upload-alt text-4xl"></i>
+          </div>
+          <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tight mb-4">{t('common.fileUpload')}</h3>
+          <p className="text-slate-400 text-sm font-bold mb-12 max-w-md text-center">
+            {t('common.fileUpload')} {t('common.dashboard')}. {t('common.noDefects')}
+          </p>
+          <button 
+            onClick={() => {
+              alert(t('common.fileUpload') + " " + t('common.monitoring'));
+            }}
+            className="bg-blue-600 text-white px-12 py-5 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20"
+          >
+            {t('common.monitoring')}
+          </button>
         </div>
       )}
     </div>

@@ -7,7 +7,8 @@ import UserProfile from './components/UserProfile';
 import AdminPanel from './components/AdminPanel';
 import LoginForm from './components/LoginForm';
 import { analyzeRoadIssue } from './geminiService';
-import { Report, LocationData, AnalysisResult, RoadHealth, User, UserRole, RouteData, ReportStatus, Notification, DefectType } from './types';
+import { Report, LocationData, AnalysisResult, RoadHealth, User, UserRole, RouteData, ReportStatus, Notification, DefectType, Severity, Language } from './types';
+import { useLanguage } from './src/lib/LanguageContext';
 import { auth, db, storage } from './firebase';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { motion, AnimatePresence } from 'motion/react';
@@ -90,7 +91,6 @@ const App: React.FC = () => {
   const [trafficLightAlert, setTrafficLightAlert] = useState<string | null>(null);
   const [startSuggestions, setStartSuggestions] = useState<any[]>([]);
   const [endSuggestions, setEndSuggestions] = useState<any[]>([]);
-  const [isMapExpanded, setIsMapExpanded] = useState(false);
   const [manualLocation, setManualLocation] = useState('');
   const [manualDescription, setManualDescription] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -656,6 +656,22 @@ const App: React.FC = () => {
     }
   };
 
+  const sendTelegramNotification = async (message: string) => {
+    const botToken = import.meta.env.VITE_TELEGRAM_BOT_TOKEN;
+    const chatId = import.meta.env.VITE_TELEGRAM_CHAT_ID;
+    if (!botToken || !chatId) return;
+
+    try {
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' }),
+      });
+    } catch (err) {
+      console.error("Telegram notification error:", err);
+    }
+  };
+
   const handleSaveReport = async (analysis: AnalysisResult, image: string) => {
     if (!currentUser || !auth.currentUser) {
       alert("Iltimos, tizimga kiring.");
@@ -668,7 +684,7 @@ const App: React.FC = () => {
       await uploadString(storageRef, image, 'data_url');
       const downloadURL = await getDownloadURL(storageRef);
 
-      await addDoc(collection(db, 'reports'), {
+      const reportData = {
         userId: currentUser.id,
         userName: `${currentUser.firstName} ${currentUser.lastName}`,
         image: downloadURL,
@@ -677,7 +693,14 @@ const App: React.FC = () => {
         timestamp: Date.now(),
         status: ReportStatus.DRAFT,
         region: currentUser.region || 'Toshkent shahri'
-      });
+      };
+
+      await addDoc(collection(db, 'reports'), reportData);
+      
+      // Notify admin via Telegram if high severity
+      if (analysis.severity === Severity.HIGH) {
+        sendTelegramNotification(`<b>🚨 YUQORI XAVF ANIQLANDI!</b>\n\n<b>Turi:</b> ${analysis.type}\n<b>Hudud:</b> ${reportData.region}\n<b>Foydalanuvchi:</b> ${reportData.userName}\n\n<a href="${downloadURL}">Rasmni ko'rish</a>`);
+      }
       
       alert("Hisobot saqlandi! Uni profil bo'limidan yuborishingiz mumkin.");
     } catch (err) {
@@ -714,18 +737,9 @@ const App: React.FC = () => {
                   setActiveView('monitor');
                   setIsMapExpanded(false);
                 }} 
-                className={`py-4 text-[10px] font-black uppercase tracking-widest border-b-2 transition-all flex items-center ${activeView === 'monitor' && !isMapExpanded ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                className={`py-4 text-[10px] font-black uppercase tracking-widest border-b-2 transition-all flex items-center ${activeView === 'monitor' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
               >
                 <i className="fas fa-satellite-dish mr-2 text-sm"></i> Monitoring
-              </button>
-              <button 
-                onClick={() => {
-                  setActiveView('monitor');
-                  setIsMapExpanded(true);
-                }} 
-                className={`py-4 text-[10px] font-black uppercase tracking-widest border-b-2 transition-all flex items-center ${activeView === 'monitor' && isMapExpanded ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-              >
-                <i className="fas fa-route mr-2 text-sm"></i> Navigatsiya
               </button>
               <button onClick={() => setActiveView('profile')} className={`py-4 text-[10px] font-black uppercase tracking-widest border-b-2 transition-all flex items-center ${activeView === 'profile' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
                 <i className="fas fa-id-card mr-2 text-sm"></i> Profil
@@ -763,177 +777,155 @@ const App: React.FC = () => {
             onSendGlobalNotification={sendGlobalNotification}
             currentLocation={currentLocation}
             notifications={notifications}
+            currentUser={currentUser}
           />
         )}
 
         {activeView === 'monitor' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full min-h-[700px]">
-            <AnimatePresence mode="wait">
-              {!isMapExpanded && (
-                <motion.div 
-                  key="monitoring-panel"
-                  initial={{ opacity: 0, x: -50 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -50 }}
-                  transition={{ duration: 0.5, ease: "circOut" }}
-                  className="lg:col-span-7 flex flex-col space-y-6"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex space-x-2 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm">
-                      <button 
-                        onClick={() => setActiveTab('live')} 
-                        className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'live' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-                      >
-                        <i className="fas fa-video mr-2"></i> Kamera
-                      </button>
-                      <button 
-                        onClick={() => setActiveTab('manual')} 
-                        className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'manual' ? 'bg-red-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-                      >
-                        <i className="fas fa-cloud-arrow-up mr-2"></i> Fayl Yuklash
-                      </button>
+            <div className="lg:col-span-7 flex flex-col space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="flex space-x-2 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm">
+                  <button 
+                    onClick={() => setActiveTab('live')} 
+                    className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'live' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <i className="fas fa-video mr-2"></i> Kamera
+                  </button>
+                  <button 
+                    onClick={() => setActiveTab('manual')} 
+                    className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'manual' ? 'bg-red-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <i className="fas fa-cloud-arrow-up mr-2"></i> Fayl Yuklash
+                  </button>
+                </div>
+                <div className="flex items-center space-x-4 bg-white/50 px-4 py-2 rounded-2xl border border-slate-200">
+                   <div className="flex flex-col text-right">
+                      <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">AI Skaner</span>
+                      <span className={`text-[10px] font-bold ${quotaError ? 'text-red-500' : 'text-emerald-600 animate-pulse'}`}>{quotaError ? 'TO\'XTADI' : 'AKTIV'}</span>
+                   </div>
+                   <div className={`w-8 h-8 rounded-full ${quotaError ? 'bg-red-500/10' : 'bg-emerald-500/10'} flex items-center justify-center border ${quotaError ? 'border-red-500/20' : 'border-emerald-500/20'}`}>
+                      <i className={`fas ${quotaError ? 'fa-triangle-exclamation text-red-500' : 'fa-brain text-emerald-500'} text-xs`}></i>
+                   </div>
+                </div>
+              </div>
+
+              {activeTab === 'manual' && (
+                <div className="bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-2xl space-y-6 animate-fade-in">
+                  <div className="flex items-center space-x-4 mb-4">
+                    <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center text-red-500">
+                      <i className="fas fa-file-image text-xl"></i>
                     </div>
-                    <div className="flex items-center space-x-4 bg-white/50 px-4 py-2 rounded-2xl border border-slate-200">
-                       <div className="flex flex-col text-right">
-                          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">AI Skaner</span>
-                          <span className={`text-[10px] font-bold ${quotaError ? 'text-red-500' : 'text-emerald-600 animate-pulse'}`}>{quotaError ? 'TO\'XTADI' : 'AKTIV'}</span>
-                       </div>
-                       <div className={`w-8 h-8 rounded-full ${quotaError ? 'bg-red-500/10' : 'bg-emerald-500/10'} flex items-center justify-center border ${quotaError ? 'border-red-500/20' : 'border-emerald-500/20'}`}>
-                          <i className={`fas ${quotaError ? 'fa-triangle-exclamation text-red-500' : 'fa-brain text-emerald-500'} text-xs`}></i>
-                       </div>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">Rasm yuklash orqali tahlil</h3>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Joylashuv va tavsifni kiriting</p>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div className="relative">
+                      <i className="fas fa-location-dot absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                      <input 
+                        type="text"
+                        placeholder="Yo'l nomi yoki manzil (Masalan: Amir Temur ko'chasi)"
+                        value={manualLocation}
+                        onChange={(e) => setManualLocation(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-5 text-sm text-slate-900 focus:outline-none focus:border-red-500 transition-all font-medium"
+                      />
+                    </div>
+                    <div className="relative">
+                      <i className="fas fa-align-left absolute left-4 top-4 text-slate-400 text-xs"></i>
+                      <textarea 
+                        placeholder="Qo'shimcha tavsif (ixtiyoriy)"
+                        value={manualDescription}
+                        onChange={(e) => setManualDescription(e.target.value)}
+                        rows={3}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-5 text-sm text-slate-900 focus:outline-none focus:border-red-500 transition-all font-medium resize-none"
+                      />
                     </div>
                   </div>
 
-                  {activeTab === 'manual' && (
-                    <div className="bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-2xl space-y-6 animate-fade-in">
-                      <div className="flex items-center space-x-4 mb-4">
-                        <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center text-red-500">
-                          <i className="fas fa-file-image text-xl"></i>
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">Rasm yuklash orqali tahlil</h3>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Joylashuv va tavsifni kiriting</p>
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-4">
-                        <div className="relative">
-                          <i className="fas fa-location-dot absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
-                          <input 
-                            type="text"
-                            placeholder="Yo'l nomi yoki manzil (Masalan: Amir Temur ko'chasi)"
-                            value={manualLocation}
-                            onChange={(e) => setManualLocation(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-5 text-sm text-slate-900 focus:outline-none focus:border-red-500 transition-all font-medium"
-                          />
-                        </div>
-                        <div className="relative">
-                          <i className="fas fa-align-left absolute left-4 top-4 text-slate-400 text-xs"></i>
-                          <textarea 
-                            placeholder="Qo'shimcha tavsif (ixtiyoriy)"
-                            value={manualDescription}
-                            onChange={(e) => setManualDescription(e.target.value)}
-                            rows={3}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-5 text-sm text-slate-900 focus:outline-none focus:border-red-500 transition-all font-medium resize-none"
-                          />
-                        </div>
-                      </div>
-
-                      <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploading || !manualLocation}
-                        className="w-full bg-red-600 hover:bg-red-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black py-4 rounded-2xl shadow-lg shadow-red-600/20 transition-all active:scale-95 uppercase tracking-widest text-xs flex items-center justify-center gap-3"
-                      >
-                        {isUploading ? (
-                          <i className="fas fa-spinner fa-spin"></i>
-                        ) : (
-                          <>
-                            <i className="fas fa-cloud-arrow-up"></i>
-                            Rasm tanlash va yuklash
-                          </>
-                        )}
-                      </button>
-                      <input type="file" ref={fileInputRef} onChange={handleManualUpload} className="hidden" accept="image/*" />
-                    </div>
-                  )}
-
-                  <div className={`relative group ${activeTab === 'manual' ? 'hidden' : ''}`}>
-                    <LiveVision 
-                      isActive={activeTab === 'live'} 
-                      onAnalysisUpdate={handleLiveUpdate} 
-                      onSave={handleSaveReport}
-                      onError={(msg) => msg === "QUOTA_EXHAUSTED" && setQuotaError(true)} 
-                    />
-                    {isAnalyzing && (
-                      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-[2rem]">
-                        <div className="w-16 h-16 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mb-4"></div>
-                        <p className="text-blue-500 font-black uppercase tracking-[0.3em] text-xs">Neural Tahlil...</p>
-                      </div>
+                  <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading || !manualLocation}
+                    className="w-full bg-red-600 hover:bg-red-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black py-4 rounded-2xl shadow-lg shadow-red-600/20 transition-all active:scale-95 uppercase tracking-widest text-xs flex items-center justify-center gap-3"
+                  >
+                    {isUploading ? (
+                      <i className="fas fa-spinner fa-spin"></i>
+                    ) : (
+                      <>
+                        <i className="fas fa-cloud-arrow-up"></i>
+                        Rasm tanlash va yuklash
+                      </>
                     )}
-                  </div>
+                  </button>
+                  <input type="file" ref={fileInputRef} onChange={handleManualUpload} className="hidden" accept="image/*" />
+                </div>
+              )}
 
-                  {lastAnalysis && (
-                    <div className="bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden animate-slide-up group">
-                      <div className="absolute -top-12 -right-12 w-48 h-48 bg-blue-600/5 rounded-full blur-3xl group-hover:bg-blue-600/10 transition-colors"></div>
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 relative z-10">
-                        <div className="flex items-center space-x-5">
-                          <div className={`text-2xl font-black px-6 py-2.5 rounded-2xl text-white ${lastAnalysis.health === RoadHealth.POOR ? 'bg-red-500 shadow-[0_10px_30px_rgba(239,68,68,0.2)]' : 'bg-emerald-500 shadow-[0_10px_30px_rgba(16,185,129,0.2)]'}`}>
-                            {lastAnalysis.health}
-                          </div>
-                          <div>
-                            <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight leading-none mb-2">{lastAnalysis.type}</h2>
-                            <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em]">Aniqlangan Yo'l Holati</p>
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 backdrop-blur-md px-6 py-3 rounded-2xl border border-slate-100 flex items-center space-x-3">
-                           <i className="fas fa-triangle-exclamation text-amber-500"></i>
-                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Xavf:</span>
-                           <span className="text-sm font-black text-slate-900">{lastAnalysis.severity}</span>
-                        </div>
+              <div className={`relative group ${activeTab === 'manual' ? 'hidden' : ''}`}>
+                <LiveVision 
+                  isActive={activeTab === 'live'} 
+                  onAnalysisUpdate={handleLiveUpdate} 
+                  onSave={handleSaveReport}
+                  onError={(msg) => msg === "QUOTA_EXHAUSTED" && setQuotaError(true)} 
+                />
+                {isAnalyzing && (
+                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-[2rem]">
+                    <div className="w-16 h-16 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mb-4"></div>
+                    <p className="text-blue-500 font-black uppercase tracking-[0.3em] text-xs">Neural Tahlil...</p>
+                  </div>
+                )}
+              </div>
+
+              {lastAnalysis && (
+                <div className="bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden animate-slide-up group">
+                  <div className="absolute -top-12 -right-12 w-48 h-48 bg-blue-600/5 rounded-full blur-3xl group-hover:bg-blue-600/10 transition-colors"></div>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 relative z-10">
+                    <div className="flex items-center space-x-5">
+                      <div className={`text-2xl font-black px-6 py-2.5 rounded-2xl text-white ${lastAnalysis.health === RoadHealth.POOR ? 'bg-red-500 shadow-[0_10px_30px_rgba(239,68,68,0.2)]' : 'bg-emerald-500 shadow-[0_10px_30px_rgba(16,185,129,0.2)]'}`}>
+                        {lastAnalysis.health}
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
-                        <div className="space-y-3">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center">
-                            <i className="fas fa-file-invoice mr-2"></i> To'liq Tavsif
-                          </p>
-                          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
-                            <p className="text-sm text-slate-600 leading-relaxed font-medium">{lastAnalysis.description}</p>
-                          </div>
-                        </div>
-                        <div className="space-y-3">
-                          <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest flex items-center">
-                            <i className="fas fa-shield-heart mr-2"></i> Xavfsizlik Tavsiyasi
-                          </p>
-                          <div className="bg-blue-50 p-5 rounded-2xl border border-blue-100">
-                            <p className="text-sm text-blue-600 leading-relaxed font-bold italic">"{lastAnalysis.recommendation}"</p>
-                          </div>
-                        </div>
+                      <div>
+                        <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight leading-none mb-2">{lastAnalysis.type}</h2>
+                        <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em]">Aniqlangan Yo'l Holati</p>
                       </div>
                     </div>
-                  )}
-                </motion.div>
+                    <div className="bg-slate-50 backdrop-blur-md px-6 py-3 rounded-2xl border border-slate-100 flex items-center space-x-3">
+                       <i className="fas fa-triangle-exclamation text-amber-500"></i>
+                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Xavf:</span>
+                       <span className="text-sm font-black text-slate-900">{lastAnalysis.severity}</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
+                    <div className="space-y-3">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center">
+                        <i className="fas fa-file-invoice mr-2"></i> To'liq Tavsif
+                      </p>
+                      <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                        <p className="text-sm text-slate-600 leading-relaxed font-medium">{lastAnalysis.description}</p>
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest flex items-center">
+                        <i className="fas fa-shield-heart mr-2"></i> Xavfsizlik Tavsiyasi
+                      </p>
+                      <div className="bg-blue-50 p-5 rounded-2xl border border-blue-100">
+                        <p className="text-sm text-blue-600 leading-relaxed font-bold italic">"{lastAnalysis.recommendation}"</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               )}
-            </AnimatePresence>
+            </div>
 
-            <motion.div 
-              layout
-              className={`${isMapExpanded ? 'lg:col-span-12' : 'lg:col-span-5'} flex flex-col space-y-6`}
-              transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-            >
+            <div className="lg:col-span-5 flex flex-col space-y-6">
               <div className="bg-white border border-slate-200 rounded-[2.5rem] p-6 shadow-2xl backdrop-blur-md">
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-xs font-black text-slate-900 uppercase tracking-[0.2em] flex items-center">
                     <i className="fas fa-map-location-dot mr-3 text-blue-600"></i> Smart Navigator
                   </h3>
                   <div className="flex items-center space-x-2">
-                    {isMapExpanded && (
-                      <button 
-                        onClick={() => setIsMapExpanded(false)}
-                        className="text-[9px] font-black text-slate-400 hover:text-blue-600 uppercase tracking-widest transition-colors flex items-center"
-                      >
-                        <i className="fas fa-compress mr-2"></i> Monitoringga qaytish
-                      </button>
-                    )}
                     {routeInfo && <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full uppercase">Optimal Yo'l Topildi</span>}
                   </div>
                 </div>
@@ -942,7 +934,6 @@ const App: React.FC = () => {
                     <input 
                       type="text" 
                       value={startQuery}
-                      onFocus={() => setIsMapExpanded(true)}
                       onChange={(e) => setStartQuery(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleSearchAddress(e as any, 'start')}
                       placeholder="Qayerdan? (Masalan: Mening joylashuvim)" 
@@ -969,7 +960,6 @@ const App: React.FC = () => {
                     <input 
                       type="text" 
                       value={endQuery}
-                      onFocus={() => setIsMapExpanded(true)}
                       onChange={(e) => setEndQuery(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleSearchAddress(e as any, 'end')}
                       placeholder="Qayerga borasiz?" 
@@ -1023,11 +1013,7 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
-              <motion.div 
-                layout
-                className="bg-white border border-slate-200 rounded-[3rem] overflow-hidden flex-grow shadow-2xl relative min-h-[400px]"
-                transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-              >
+              <div className="bg-white border border-slate-200 rounded-[3rem] overflow-hidden flex-grow shadow-2xl relative min-h-[400px]">
                 {currentLocation && (
                   <MapDisplay 
                     currentLocation={currentLocation} 
@@ -1036,8 +1022,8 @@ const App: React.FC = () => {
                     onRouteFound={setRouteInfo} 
                   />
                 )}
-              </motion.div>
-            </motion.div>
+              </div>
+            </div>
           </div>
         )}
       </main>

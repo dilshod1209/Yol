@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { User, Report, ReportStatus, Severity } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
+import { useLanguage } from '../src/lib/LanguageContext';
 
 interface UserProfileProps {
   user: User;
@@ -11,6 +12,7 @@ interface UserProfileProps {
 }
 
 const UserProfile: React.FC<UserProfileProps> = ({ user, userReports, onDelete, onSubmit }) => {
+  const { t } = useLanguage();
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
 
   const getStatusColor = (status: ReportStatus) => {
@@ -49,35 +51,38 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, userReports, onDelete, 
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-8 rounded-[2rem] border border-slate-200 hover:border-blue-500/30 transition-all group shadow-sm">
-          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-3">Tizimga yuborilganlar</p>
+          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-3">{t('common.submitted')}</p>
           <div className="flex items-end space-x-3">
              <p className="text-4xl font-black text-slate-900">{userReports.filter(r => r.status !== ReportStatus.DRAFT).length}</p>
-             <span className="text-slate-400 text-xs mb-1 font-bold">Hisobot</span>
+             <span className="text-slate-400 text-xs mb-1 font-bold">{t('common.reports')}</span>
           </div>
         </div>
         <div className="bg-white p-8 rounded-[2rem] border border-slate-200 hover:border-red-500/30 transition-all group shadow-sm">
-          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-3">Siz topgan xavflar</p>
+          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-3">{t('common.highRisk')}</p>
           <div className="flex items-end space-x-3">
              <p className="text-4xl font-black text-red-500">{userReports.filter(r => r.analysis.severity === Severity.HIGH).length}</p>
-             <span className="text-slate-400 text-xs mb-1 font-bold">Yuqori xavf</span>
+             <span className="text-slate-400 text-xs mb-1 font-bold">{t('common.high')}</span>
           </div>
         </div>
         <div className="bg-white p-8 rounded-[2rem] border border-slate-200 hover:border-emerald-500/30 transition-all group shadow-sm">
-          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-3">Tuzatilgan yo'llar</p>
+          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-3">{t('common.fixed')}</p>
           <div className="flex items-end space-x-3">
              <p className="text-4xl font-black text-emerald-500">{userReports.filter(r => r.status === ReportStatus.FIXED).length}</p>
-             <span className="text-slate-400 text-xs mb-1 font-bold">Bajarildi</span>
+             <span className="text-slate-400 text-xs mb-1 font-bold">{t('common.fixed')}</span>
           </div>
         </div>
       </div>
 
       <div className="space-y-6">
-        <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Sizning faollik tarixingiz</h3>
+        <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight flex items-center gap-2">
+          <i className="fas fa-layer-group text-blue-600"></i>
+          {t('common.reports')}
+        </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {userReports.length === 0 ? (
             <div className="col-span-full py-20 text-center text-slate-400 bg-white rounded-[2rem] border border-dashed border-slate-200">
                <i className="fas fa-layer-group text-4xl mb-4 opacity-10"></i>
-               <p className="font-bold text-xs uppercase">Hali hech narsa yo'q. Yo'llarni monitoring qiling!</p>
+               <p className="font-bold text-xs uppercase">{t('common.noDefects')}</p>
             </div>
           ) : (
             userReports.map(r => (
@@ -90,8 +95,8 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, userReports, onDelete, 
                   <div className="flex items-center space-x-5">
                     <div className="relative">
                       <img src={r.image} className="w-16 h-16 rounded-2xl object-cover border border-slate-100" />
-                      <div className={`absolute -top-2 -left-2 ${r.status !== ReportStatus.DRAFT ? 'bg-emerald-600' : 'bg-blue-600'} w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black text-white shadow-lg`}>
-                         <i className={`fas ${r.status !== ReportStatus.DRAFT ? 'fa-check-double' : 'fa-check'}`}></i>
+                      <div className={`absolute -top-2 -left-2 w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black text-white shadow-lg ${r.status === ReportStatus.DRAFT ? 'bg-blue-600' : 'bg-emerald-600'}`}>
+                         <i className={`fas ${r.status === ReportStatus.DRAFT ? 'fa-pencil' : 'fa-check-double'}`}></i>
                       </div>
                     </div>
                     <div>
@@ -109,7 +114,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, userReports, onDelete, 
                       <button 
                         onClick={(e) => { e.stopPropagation(); onSubmit(r.id); }}
                         className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white hover:bg-emerald-500 transition-all shadow-lg"
-                        title="Adminga yuborish"
+                        title={t('common.send')}
                       >
                         <i className="fas fa-paper-plane"></i>
                       </button>
@@ -122,7 +127,6 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, userReports, onDelete, 
                     </button>
                   </div>
                 </div>
-
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                    <p className="text-[10px] text-slate-600 leading-relaxed line-clamp-2">{r.analysis.description}</p>
                 </div>

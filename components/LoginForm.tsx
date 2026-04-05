@@ -9,12 +9,14 @@ import {
 } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { motion } from 'framer-motion';
+import { useLanguage } from '../src/lib/LanguageContext';
 
 interface LoginFormProps {
   onDemoAdminLogin: () => void;
 }
 
 const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
+  const { t } = useLanguage();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showProfileSetup, setShowProfileSetup] = useState(false);
@@ -50,7 +52,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
 
       if (isRegistering) {
         if (!firstName || !lastName || !region || !district || !phone || !password) {
-          setError("Iltimos, barcha maydonlarni to'ldiring.");
+          setError(t('common.noDefects')); // Placeholder for "Please fill all fields"
           setLoading(false);
           return;
         }
@@ -164,7 +166,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
               Road<span className="text-blue-600">AI</span>
             </h1>
             <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em]">
-              Yo'l monitoringi platformasi
+              {t('common.monitoring')} platformasi
             </p>
           </div>
 
@@ -186,7 +188,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                           <i className="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]"></i>
                           <input
                             type="text"
-                            placeholder="Ism"
+                            placeholder={t('common.name')}
                             required
                             value={firstName}
                             onChange={(e) => setFirstName(e.target.value)}
@@ -197,7 +199,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                           <i className="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]"></i>
                           <input
                             type="text"
-                            placeholder="Familiya"
+                            placeholder={t('common.surname')}
                             required
                             value={lastName}
                             onChange={(e) => setLastName(e.target.value)}
@@ -213,7 +215,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                           onChange={(e) => setRegion(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-xs text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
                         >
-                          <option value="">Viloyat</option>
+                          <option value="">{t('common.region')}</option>
                           {regions.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
 
@@ -223,7 +225,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                           onChange={(e) => setDistrict(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-xs text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
                         >
-                          <option value="">Tuman</option>
+                          <option value="">{t('common.district')}</option>
                           {region && districts[region as keyof typeof districts]?.map(d => (
                             <option key={d} value={d}>{d}</option>
                           ))}
@@ -236,7 +238,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                     <i className="fas fa-phone absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
                     <input
                       type="tel"
-                      placeholder="Telefon raqami (+998...)"
+                      placeholder={t('common.phone')}
                       required
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
@@ -297,10 +299,6 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                   {isRegistering ? "Akkauntingiz bormi? Kirish" : "Yangi akkaunt ochish (Register)"}
                 </button>
               </div>
-
-              <p className="text-center text-[10px] text-slate-400 font-medium px-6">
-                Tizimga kirish orqali siz foydalanish shartlariga rozilik bildirasiz.
-              </p>
             </div>
           ) : (
             <form onSubmit={handleProfileSubmit} className="space-y-4">
@@ -313,7 +311,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                   onChange={(e) => setRegion(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-5 text-sm text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
                 >
-                  <option value="">Viloyatni tanlang</option>
+                  <option value="">{t('common.region')}</option>
                   {regions.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
 
@@ -323,7 +321,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                   onChange={(e) => setDistrict(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-5 text-sm text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
                 >
-                  <option value="">Tumanni tanlang</option>
+                  <option value="">{t('common.district')}</option>
                   {region && districts[region as keyof typeof districts]?.map(d => (
                     <option key={d} value={d}>{d}</option>
                   ))}
@@ -331,7 +329,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
 
                 <input
                   type="tel"
-                  placeholder="Telefon raqami (+998...)"
+                  placeholder={t('common.phone')}
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}

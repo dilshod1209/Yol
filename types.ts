@@ -33,7 +33,17 @@ export enum ReportStatus {
 
 export enum UserRole {
   USER = "USER",
-  ADMIN = "ADMIN"
+  STAFF = "STAFF",
+  MODERATOR = "MODERATOR",
+  ADMIN = "ADMIN",
+  SUPER_ADMIN = "SUPER_ADMIN"
+}
+
+export enum Language {
+  UZ = "uz",
+  QR = "qr",
+  EN = "en",
+  RU = "ru"
 }
 
 export interface User {
@@ -50,6 +60,7 @@ export interface User {
   isBlocked?: boolean;
   isOnline?: boolean;
   isCameraActive?: boolean;
+  language?: Language;
   createdAt: number;
 }
 

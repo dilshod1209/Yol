@@ -1,6 +1,7 @@
 
 import React from 'react';
-import { User, UserRole, Notification } from '../types';
+import { User, UserRole, Notification, Language } from '../types';
+import { useLanguage } from '../src/lib/LanguageContext';
 
 interface HeaderProps {
   user: User;
@@ -10,6 +11,7 @@ interface HeaderProps {
 }
 
 const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAsRead }) => {
+  const { language, setLanguage, t } = useLanguage();
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
   return (
@@ -32,6 +34,30 @@ const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAs
           </div>
           
           <div className="flex items-center space-x-6">
+            {/* Language Switcher */}
+            <div className="relative group/lang">
+              <button className="flex items-center space-x-2 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-widest hover:border-blue-600 transition-all">
+                <i className="fas fa-globe text-slate-400"></i>
+                <span>{language}</span>
+              </button>
+              <div className="absolute right-0 top-12 w-40 bg-white border border-slate-200 rounded-2xl shadow-2xl opacity-0 invisible group-hover/lang:opacity-100 group-hover/lang:visible transition-all p-2 z-50">
+                {[
+                  { code: Language.UZ, label: t('common.uzbek') },
+                  { code: Language.QR, label: t('common.karakalpak') },
+                  { code: Language.EN, label: t('common.english') },
+                  { code: Language.RU, label: t('common.russian') }
+                ].map((lang) => (
+                  <button
+                    key={lang.code}
+                    onClick={() => setLanguage(lang.code)}
+                    className={`w-full text-left px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${language === lang.code ? 'bg-blue-50 text-blue-600' : 'hover:bg-slate-50 text-slate-600'}`}
+                  >
+                    {lang.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Notifications */}
             <div className="relative group/notif">
               <button className="w-10 h-10 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:border-blue-600 transition-all relative">
@@ -45,15 +71,15 @@ const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAs
               
               <div className="absolute right-0 top-14 w-80 bg-white border border-slate-200 rounded-[2rem] shadow-2xl opacity-0 invisible group-hover/notif:opacity-100 group-hover/notif:visible transition-all p-4 z-50 transform group-hover/notif:translate-y-0 translate-y-2">
                 <div className="flex items-center justify-between mb-4 px-2">
-                  <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest">Bildirishnomalar</h4>
-                  <span className="text-[8px] font-black text-slate-400 uppercase">{notifications.length} jami</span>
+                  <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest">{t('common.notifications')}</h4>
+                  <span className="text-[8px] font-black text-slate-400 uppercase">{notifications.length} {t('common.all')}</span>
                 </div>
                 
                 <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                   {notifications.length === 0 ? (
                     <div className="py-8 text-center text-slate-300">
                       <i className="fas fa-bell-slash mb-2 opacity-20"></i>
-                      <p className="text-[9px] font-black uppercase">Yangi xabarlar yo'q</p>
+                      <p className="text-[9px] font-black uppercase">{t('common.noDefects')}</p>
                     </div>
                   ) : (
                     notifications.map(n => (
@@ -76,8 +102,8 @@ const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAs
 
             <div className="hidden sm:flex flex-col items-end">
               <span className="text-xs font-black text-slate-900 uppercase tracking-tight">{user.firstName} {user.lastName}</span>
-              <span className={`text-[9px] font-black uppercase tracking-widest ${user.role === UserRole.ADMIN ? 'text-blue-600' : 'text-emerald-600'}`}>
-                {user.role === UserRole.ADMIN ? 'SYS_ADMIN' : 'TRUSTED_USER'}
+              <span className={`text-[9px] font-black uppercase tracking-widest ${user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN ? 'text-blue-600' : 'text-emerald-600'}`}>
+                {user.role}
               </span>
             </div>
             <div className="relative group">
@@ -94,7 +120,7 @@ const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAs
                   className="w-full flex items-center space-x-3 px-4 py-3 hover:bg-red-50 text-red-500 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest"
                 >
                   <i className="fas fa-power-off"></i>
-                  <span>Tizimdan chiqish</span>
+                  <span>{t('common.logout')}</span>
                 </button>
               </div>
             </div>
