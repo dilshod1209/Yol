@@ -8,9 +8,10 @@ interface HeaderProps {
   onLogout: () => void;
   notifications: Notification[];
   onMarkAsRead: (id: string) => void;
+  onMarkAllAsRead: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAsRead }) => {
+const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAsRead, onMarkAllAsRead }) => {
   const { language, setLanguage, t } = useLanguage();
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
@@ -72,7 +73,19 @@ const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAs
               <div className="absolute right-0 top-14 w-80 bg-white border border-slate-200 rounded-[2rem] shadow-2xl opacity-0 invisible group-hover/notif:opacity-100 group-hover/notif:visible transition-all p-4 z-50 transform group-hover/notif:translate-y-0 translate-y-2">
                 <div className="flex items-center justify-between mb-4 px-2">
                   <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest">{t('common.notifications')}</h4>
-                  <span className="text-[8px] font-black text-slate-400 uppercase">{notifications.length} {t('common.all')}</span>
+                  <div className="flex items-center space-x-3">
+                    {unreadCount > 0 && (
+                      <button 
+                        onClick={onMarkAllAsRead}
+                        className="text-[8px] font-black text-blue-600 uppercase hover:underline"
+                        title={t('common.markAllAsRead')}
+                      >
+                        <i className="fas fa-check-double mr-1"></i>
+                        {t('common.all')}
+                      </button>
+                    )}
+                    <span className="text-[8px] font-black text-slate-400 uppercase">{notifications.length}</span>
+                  </div>
                 </div>
                 
                 <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
@@ -103,7 +116,7 @@ const Header: React.FC<HeaderProps> = ({ user, onLogout, notifications, onMarkAs
             <div className="hidden sm:flex flex-col items-end">
               <span className="text-xs font-black text-slate-900 uppercase tracking-tight">{user.firstName} {user.lastName}</span>
               <span className={`text-[9px] font-black uppercase tracking-widest ${user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN ? 'text-blue-600' : 'text-emerald-600'}`}>
-                {user.role}
+                {user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN ? t('common.systemAdmin') : user.role}
               </span>
             </div>
             <div className="relative group">

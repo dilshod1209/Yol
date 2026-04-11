@@ -1037,7 +1037,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 {filteredUsers.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="p-12 text-center text-slate-300">
-                      <p className="font-black uppercase tracking-[0.2em] text-[10px]">{t('common.noDefects')}</p>
+                      <p className="font-black uppercase tracking-[0.2em] text-[10px]">{t('common.users')} topilmadi.</p>
                     </td>
                   </tr>
                 ) : (

@@ -402,6 +402,22 @@ const App: React.FC = () => {
     }
   };
 
+  const markAllNotificationsAsRead = async () => {
+    if (!auth.currentUser) return;
+    const unreadNotifications = notifications.filter(n => !n.isRead);
+    if (unreadNotifications.length === 0) return;
+
+    try {
+      const batch = writeBatch(db);
+      unreadNotifications.forEach(n => {
+        batch.update(doc(db, 'notifications', n.id), { isRead: true });
+      });
+      await batch.commit();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'notifications/all');
+    }
+  };
+
   const updateReportStatus = async (reportId: string, newStatus: ReportStatus) => {
     if (!auth.currentUser) {
       alert("Demo Admin rejimida statusni o'zgartirish imkonsiz.");
@@ -434,13 +450,28 @@ const App: React.FC = () => {
     }
   };
 
-  const submitReport = async (id: string) => {
+  const submitReport = async (id: string, address?: string) => {
     if (!auth.currentUser) {
       alert("Demo rejimida hisobot yuborish imkonsiz.");
       return;
     }
     try {
-      await updateDoc(doc(db, 'reports', id), { status: ReportStatus.SUBMITTED });
+      const updateData: any = { status: ReportStatus.SUBMITTED };
+      if (address) {
+        updateData.address = address;
+      }
+      await updateDoc(doc(db, 'reports', id), updateData);
+      
+      // Notify Admin
+      await addDoc(collection(db, 'notifications'), {
+        userId: 'admin',
+        title: "Yangi hisobot kelib tushdi",
+        message: `${currentUser?.firstName} ${currentUser?.lastName} yangi nosozlik haqida hisobot yubordi.`,
+        timestamp: Date.now(),
+        isRead: false,
+        type: 'new_report'
+      });
+
       alert("Hisobot muvaffaqiyatli yuborildi! Endi uni admin ko'ra oladi.");
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `reports/${id}`);
@@ -702,7 +733,10 @@ const App: React.FC = () => {
         sendTelegramNotification(`<b>🚨 YUQORI XAVF ANIQLANDI!</b>\n\n<b>Turi:</b> ${analysis.type}\n<b>Hudud:</b> ${reportData.region}\n<b>Foydalanuvchi:</b> ${reportData.userName}\n\n<a href="${downloadURL}">Rasmni ko'rish</a>`);
       }
       
-      alert("Hisobot saqlandi! Uni profil bo'limidan yuborishingiz mumkin.");
+      // Silent save for live updates, alert only for manual
+      if (activeTab === 'manual') {
+        alert("Hisobot saqlandi! Uni profil bo'limidan yuborishingiz mumkin.");
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'reports');
       alert("Hisobotni saqlashda xatolik.");
@@ -726,6 +760,7 @@ const App: React.FC = () => {
         onLogout={handleLogout} 
         notifications={notifications}
         onMarkAsRead={markNotificationAsRead}
+        onMarkAllAsRead={markAllNotificationsAsRead}
       />
       
       <div className="bg-white/80 border-b border-slate-200 sticky top-16 z-40 backdrop-blur-xl">
@@ -735,7 +770,6 @@ const App: React.FC = () => {
               <button 
                 onClick={() => {
                   setActiveView('monitor');
-                  setIsMapExpanded(false);
                 }} 
                 className={`py-4 text-[10px] font-black uppercase tracking-widest border-b-2 transition-all flex items-center ${activeView === 'monitor' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
               >

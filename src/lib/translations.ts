@@ -36,6 +36,7 @@ export const translations = {
       highRisk: "Yuqori xavf",
       activeUsers: "Faol foydalanuvchilar",
       recentDefects: "So'nggi nosozliklar",
+      systemAdmin: "Tizim admini",
       exportPdf: "PDF eksport",
       exportExcel: "Excel eksport",
       send: "Yuborish",
@@ -154,7 +155,11 @@ export const translations = {
       roadReport: "Yo'l Nosozliklari Hisoboti",
       totalMessages: "Jami xabarlar",
       unknownRegion: "Noma'lum",
-      risk: "Xavf"
+      risk: "Xavf",
+      markAllAsRead: "Hammasini o'qilgan deb belgilash",
+      userId: "ID",
+      filters: "Filtrlar",
+      clear: "Tozalash"
     }
   },
   [Language.QR]: {
@@ -191,6 +196,7 @@ export const translations = {
       highRisk: "Joqarı qáwip",
       activeUsers: "Belsendi paydalanıwshılar",
       recentDefects: "Sońǵı buzılıslar",
+      systemAdmin: "Sistema admini",
       exportPdf: "PDF eksport",
       exportExcel: "Excel eksport",
       send: "Jiberiw",
@@ -309,7 +315,11 @@ export const translations = {
       roadReport: "Jol Mashqalaları Esabatı",
       totalMessages: "Jámi xabarlar",
       unknownRegion: "Belgisiz",
-      risk: "Qáwip"
+      risk: "Qáwip",
+      markAllAsRead: "Hámmasin oqılǵan dep belgilew",
+      userId: "ID",
+      filters: "Filtrlar",
+      clear: "Tazalaw"
     }
   },
   [Language.EN]: {
@@ -346,6 +356,7 @@ export const translations = {
       highRisk: "High Risk",
       activeUsers: "Active Users",
       recentDefects: "Recent Defects",
+      systemAdmin: "System Admin",
       exportPdf: "Export PDF",
       exportExcel: "Export Excel",
       send: "Send",
@@ -464,7 +475,11 @@ export const translations = {
       roadReport: "Road Defect Report",
       totalMessages: "Total messages",
       unknownRegion: "Unknown",
-      risk: "Risk"
+      risk: "Risk",
+      markAllAsRead: "Mark all as read",
+      userId: "ID",
+      filters: "Filters",
+      clear: "Clear"
     }
   },
   [Language.RU]: {
@@ -501,6 +516,7 @@ export const translations = {
       highRisk: "Высокий риск",
       activeUsers: "Активные пользователи",
       recentDefects: "Последние дефекты",
+      systemAdmin: "Системный админ",
       exportPdf: "Экспорт PDF",
       exportExcel: "Экспорт Excel",
       send: "Отправить",
@@ -619,7 +635,11 @@ export const translations = {
       roadReport: "Отчет о дорожных дефектах",
       totalMessages: "Всего сообщений",
       unknownRegion: "Неизвестно",
-      risk: "Риск"
+      risk: "Риск",
+      markAllAsRead: "Отметить все как прочитанные",
+      userId: "ID",
+      filters: "Фильтры",
+      clear: "Очистить"
     }
   }
 };
