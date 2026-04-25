@@ -1,0 +1,116 @@
+@import "tailwindcss/index.css";
+@import "leaflet/dist/leaflet.css";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap');
+
+:root {
+  --bg-color: #f8fafc;
+  --accent-blue: #2563eb;
+  --accent-green: #10b981;
+  --text-main: #0f172a;
+  --sidebar-bg: #ffffff;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-main);
+}
+
+.glass-card {
+  @apply bg-white/90 backdrop-blur-xl border border-slate-200/60 shadow-[0_8px_30px_rgb(0,0,0,0.04)];
+}
+
+.glass-panel {
+  @apply bg-white/95 backdrop-blur-xl border border-slate-200 shadow-sm transition-all duration-300;
+}
+
+.blue-glow {
+  box-shadow: 0 0 20px rgba(37, 99, 235, 0.15);
+}
+
+.green-glow {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-slate-100;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.bounding-box {
+  position: absolute;
+  border-width: 2px;
+  pointer-events: none;
+  animation: box-blink 4s infinite;
+}
+
+@keyframes box-blink {
+  0%, 100% { opacity: 0.9; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.995); }
+}
+
+.scan-line {
+  position: absolute;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(to bottom, transparent, var(--accent-blue), transparent);
+  animation: scan 4s linear infinite;
+  z-index: 10;
+  opacity: 0.5;
+}
+
+@keyframes scan {
+  0% { top: 0%; }
+  100% { top: 100%; }
+}
+
+/* 3D Perspective Utils */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+}
+
+.rotate-y-12 {
+  transform: rotateY(12deg);
+}
+
+.hover-lift {
+  @apply transition-transform duration-300;
+}
+.hover-lift:hover {
+  @apply -translate-y-2;
+  transform: translateY(-8px) scale(1.02);
+}

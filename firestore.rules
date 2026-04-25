@@ -13,66 +13,47 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
     
-    function isAdmin() {
+    function isHardcodedAdmin() {
       return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN' ||
-         (request.auth.token.email == "dilshodallaberdiyev57@gmail.com" && request.auth.token.email_verified == true));
+        (request.auth.uid == "7YahvuqrUVghLlnigHp79vYiuUg2" ||
+         request.auth.token.email == "dilshodallaberdiyev57@gmail.com" || 
+         request.auth.token.email == "admin@road.ai");
     }
 
-    function isValidUser(data) {
-      return data.firstName is string && data.firstName.size() > 0 && data.firstName.size() < 100 &&
-             data.lastName is string && data.lastName.size() > 0 && data.lastName.size() < 100 &&
-             data.email is string && data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
-             data.phone is string && data.phone.size() >= 9 &&
-             (!('personalCode' in data) || (data.personalCode is string)) &&
-             data.region is string &&
-             data.district is string &&
-             data.role in ['USER', 'ADMIN'] &&
-             data.createdAt is number &&
-             (!('isOnline' in data) || (data.isOnline is bool)) &&
-             (!('isCameraActive' in data) || (data.isCameraActive is bool)) &&
-             (!('isBlocked' in data) || (data.isBlocked is bool));
+    function isAdmin() {
+      return isHardcodedAdmin() || 
+        (isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN');
     }
 
-    function isValidReport(data) {
-      return data.userId is string &&
-             data.userName is string &&
-             data.image is string &&
-             data.analysis is map &&
-             data.status in ['Qoralama', 'Yuborilgan', 'Ko\'rib chiqilmoqda', 'Ta\'mirlanmoqda', 'Tuzatilgan', 'Rad etilgan'] &&
-             data.timestamp is number &&
-             data.region is string &&
-             (!('address' in data) || (data.address is string)) &&
-             (!('description' in data) || (data.description is string));
+    match /{allPaths=**} {
+      allow read, write: if isHardcodedAdmin();
     }
-
-    // ===============================================================
-    // Rules
-    // ===============================================================
 
     match /users/{userId} {
-      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
-      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == 'USER';
-      allow update: if isAdmin() || (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role);
-      allow delete: if isAdmin();
+      allow get: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow list: if isHardcodedAdmin() || isAdmin(); 
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isHardcodedAdmin() || isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role);
+      allow delete: if isHardcodedAdmin() || isAdmin();
     }
 
     match /reports/{reportId} {
-      allow read: if isAuthenticated() && (isAdmin() || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() && isValidReport(request.resource.data) && request.resource.data.userId == request.auth.uid;
-      allow update: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid && isValidReport(request.resource.data));
-      allow delete: if isAdmin();
+      allow get, list: if isHardcodedAdmin() || isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isHardcodedAdmin() || isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow delete: if isHardcodedAdmin() || isAdmin();
     }
 
     match /notifications/{notificationId} {
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == 'global' || (isAdmin() && resource.data.userId == 'admin'));
-      allow create: if isAdmin() || (isAuthenticated() && request.resource.data.userId == 'admin');
-      allow update: if isAdmin() || (isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == 'global') && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']));
-      allow delete: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow get, list: if isHardcodedAdmin() || isAdmin() || (isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == 'global'));
+      allow create: if isHardcodedAdmin() || isAdmin() || (isAuthenticated() && (request.resource.data.userId == 'admin' || request.resource.data.userId == request.auth.uid));
+      allow update: if isHardcodedAdmin() || isAdmin() || (isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == 'global') && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']));
+      allow delete: if isHardcodedAdmin() || isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
     }
 
     match /test/{docId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
     }
   }
 }

@@ -37,9 +37,16 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
     e.preventDefault();
     setError('');
     
-    // Special admin bypass
-    if (phone === 'admin' && password === 'admin') {
-      onDemoAdminLogin();
+    // Special admin bypass with Firebase authentication
+    if ((phone === 'admin' || phone === 'admin@system.com' || phone === 'admin@road.ai') && password === 'admin') {
+      setLoading(true);
+      try {
+        onDemoAdminLogin();
+      } catch (err: any) {
+        console.error("Admin login failed:", err);
+      } finally {
+        setLoading(false);
+      }
       return;
     }
 
@@ -48,11 +55,23 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
       const { signInWithEmailAndPassword, createUserWithEmailAndPassword } = await import('firebase/auth');
       
       // Map phone to a dummy email for Firebase Auth
-      const dummyEmail = `${phone.replace(/\+/g, '')}@road.ai`;
+      const safePhone = phone.replace(/[^a-zA-Z0-9]/g, '');
+      if (!safePhone) {
+        setError("Iltimos, haqiqiy telefon raqamini kiriting.");
+        setLoading(false);
+        return;
+      }
+      const dummyEmail = `${safePhone}@road.ai`;
 
       if (isRegistering) {
         if (!firstName || !lastName || !region || !district || !phone || !password) {
-          setError(t('common.noDefects')); // Placeholder for "Please fill all fields"
+          setError("Iltimos, barcha maydonlarni to'ldiring.");
+          setLoading(false);
+          return;
+        }
+
+        if (password.length < 6) {
+          setError("Maxfiy kod kamida 6 ta belgidan iborat bo'lishi kerak.");
           setLoading(false);
           return;
         }
@@ -70,7 +89,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
           district,
           role: UserRole.USER,
           isBlocked: false,
-          personalCode: password, // The "code" the user set
+          personalCode: password,
           createdAt: Date.now()
         };
 
@@ -79,12 +98,28 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
         await signInWithEmailAndPassword(auth, dummyEmail, password);
       }
     } catch (err: any) {
-      console.error(err);
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') setError("Telefon raqami yoki kod noto'g'ri.");
-      else if (err.code === 'auth/wrong-password') setError("Noto'g'ri kod.");
-      else if (err.code === 'auth/email-already-in-use') setError("Bu telefon raqami allaqachon ro'yxatdan o'tgan.");
-      else if (err.code === 'auth/operation-not-allowed') setError("Tizimda email/parol orqali kirish yoqilmagan. Iltimos, Firebase Console'da uni yoqing.");
-      else setError("Xatolik yuz berdi: " + err.message);
+      console.error("Auth Error Code:", err.code);
+      console.error("Auth Error Message:", err.message);
+      
+      const errorCode = err.code;
+      
+      if (errorCode === 'auth/user-not-found' || errorCode === 'auth/invalid-credential') {
+        setError("Telefon raqami yoki kod noto'g'ri.");
+      } else if (errorCode === 'auth/wrong-password') {
+        setError("Noto'g'ri kod.");
+      } else if (errorCode === 'auth/invalid-email') {
+        setError("Telefon raqami formati noto'g'ri.");
+      } else if (errorCode === 'auth/email-already-in-use') {
+        setError("Bu telefon raqami allaqachon ro'yxatdan o'tgan.");
+      } else if (errorCode === 'auth/weak-password') {
+        setError("Kod juda oddiy (kamida 6 belgi kerak).");
+      } else if (errorCode === 'auth/too-many-requests') {
+        setError("Ko'p marta xato urinishlar bo'ldi. Birozdan keyin qayta urunib ko'ring.");
+      } else if (errorCode === 'auth/operation-not-allowed') {
+        setError("Tizimda email/parol orqali kirish yoqilmagan. Firebase Console'da uni yoqing.");
+      } else {
+        setError("Kirishda xatolik: " + (err.code || "Noma'lum xatolik"));
+      }
     } finally {
       setLoading(false);
     }
@@ -111,8 +146,16 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
         setShowProfileSetup(true);
       }
     } catch (err: any) {
-      console.error(err);
-      setError("Kirishda xatolik yuz berdi.");
+      console.error("Google Auth Error:", err);
+      if (err.code === 'auth/popup-closed-by-user') {
+        setError("Kirish oynasi yopildi.");
+      } else if (err.code === 'auth/invalid-credential') {
+        setError("Google hisobi orqali kirishda xatolik yuz berdi.");
+      } else if (err.code === 'auth/cancelled-popup-request') {
+        // Ignore parallel popup requests
+      } else {
+        setError("Kirishda xatolik yuz berdi: " + (err.code || "Noma'lum"));
+      }
     } finally {
       setLoading(false);
     }
@@ -148,8 +191,8 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 relative overflow-hidden">
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/5 rounded-full blur-[120px]"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-600/5 rounded-full blur-[120px]"></div>
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-500/5 rounded-full blur-[120px]"></div>
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-500/5 rounded-full blur-[120px]"></div>
       </div>
 
       <motion.div 
@@ -157,10 +200,10 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
         animate={{ opacity: 1, scale: 1 }}
         className="w-full max-w-md relative z-10"
       >
-        <div className="bg-white border border-slate-200 rounded-[2.5rem] p-10 shadow-2xl shadow-slate-200/50">
+        <div className="bg-white rounded-[3rem] p-10 border border-slate-200 shadow-2xl">
           <div className="text-center mb-10">
-            <div className="inline-flex items-center justify-center w-20 h-20 bg-blue-600 rounded-3xl shadow-xl shadow-blue-600/20 mb-6">
-              <i className="fas fa-road text-white text-3xl"></i>
+            <div className="inline-flex items-center justify-center w-20 h-20 bg-slate-50 border border-slate-100 rounded-3xl shadow-lg mb-6">
+              <i className="fas fa-road text-blue-600 text-3xl"></i>
             </div>
             <h1 className="text-3xl font-black text-slate-900 tracking-tight uppercase mb-2">
               Road<span className="text-blue-600">AI</span>
@@ -172,7 +215,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
 
           {error && (
             <div className="bg-red-50 border border-red-100 p-4 rounded-2xl text-red-500 text-xs font-bold mb-8 flex items-center">
-              <i className="fas fa-circle-exclamation mr-3"></i>
+              <i className="fas fa-circle-exclamation mr-3 text-red-400"></i>
               {error}
             </div>
           )}
@@ -185,7 +228,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                     <>
                       <div className="grid grid-cols-2 gap-3">
                         <div className="relative">
-                          <i className="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]"></i>
+                          <i className="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 text-[10px]"></i>
                           <input
                             type="text"
                             placeholder={t('common.name')}
@@ -196,7 +239,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                           />
                         </div>
                         <div className="relative">
-                          <i className="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]"></i>
+                          <i className="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 text-[10px]"></i>
                           <input
                             type="text"
                             placeholder={t('common.surname')}
@@ -213,7 +256,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                           required
                           value={region}
                           onChange={(e) => setRegion(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-xs text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-xs text-slate-500 focus:outline-none focus:border-blue-500 transition-all font-medium appearance-none"
                         >
                           <option value="">{t('common.region')}</option>
                           {regions.map(r => <option key={r} value={r}>{r}</option>)}
@@ -223,7 +266,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                           required
                           value={district}
                           onChange={(e) => setDistrict(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-xs text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-xs text-slate-500 focus:outline-none focus:border-blue-500 transition-all font-medium appearance-none"
                         >
                           <option value="">{t('common.district')}</option>
                           {region && districts[region as keyof typeof districts]?.map(d => (
@@ -235,9 +278,9 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                   )}
 
                   <div className="relative">
-                    <i className="fas fa-phone absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                    <i className="fas fa-phone absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i>
                     <input
-                      type="tel"
+                      type="text"
                       placeholder={t('common.phone')}
                       required
                       value={phone}
@@ -246,7 +289,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                     />
                   </div>
                   <div className="relative">
-                    <i className="fas fa-key absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                    <i className="fas fa-key absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i>
                     <input
                       type="password"
                       placeholder={isRegistering ? "Kod yarating" : "Kod"}
@@ -261,7 +304,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-black py-4 rounded-2xl shadow-lg shadow-blue-600/20 transition-all active:scale-95 uppercase tracking-widest text-xs"
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white font-black py-4 rounded-2xl shadow-xl shadow-blue-600/10 transition-all active:scale-95 uppercase tracking-widest text-xs"
                 >
                   {loading ? <i className="fas fa-spinner fa-spin"></i> : (isRegistering ? "Ro'yxatdan o'tish" : "Kirish")}
                 </button>
@@ -276,7 +319,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
               <button
                 onClick={handleGoogleLogin}
                 disabled={loading}
-                className="w-full flex items-center justify-center space-x-4 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold py-4 rounded-2xl transition-all active:scale-95 shadow-sm"
+                className="w-full flex items-center justify-center space-x-4 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 font-bold py-4 rounded-2xl transition-all active:scale-95 shadow-sm"
               >
                 {loading ? (
                   <i className="fas fa-spinner fa-spin"></i>
@@ -302,14 +345,14 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
             </div>
           ) : (
             <form onSubmit={handleProfileSubmit} className="space-y-4">
-              <p className="text-sm font-bold text-slate-700 mb-4 text-center">Profil ma'lumotlarini to'ldiring</p>
+              <p className="text-sm font-bold text-slate-500 mb-4 text-center">Profil ma'lumotlarini to'ldiring</p>
               
               <div className="grid grid-cols-1 gap-4">
                 <select
                   required
                   value={region}
                   onChange={(e) => setRegion(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-5 text-sm text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-5 text-sm text-slate-600 focus:outline-none focus:border-blue-500 transition-all font-medium appearance-none"
                 >
                   <option value="">{t('common.region')}</option>
                   {regions.map(r => <option key={r} value={r}>{r}</option>)}
@@ -319,7 +362,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
                   required
                   value={district}
                   onChange={(e) => setDistrict(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-5 text-sm text-slate-900 focus:outline-none focus:border-blue-500 transition-all font-medium"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-5 text-sm text-slate-600 focus:outline-none focus:border-blue-500 transition-all font-medium appearance-none"
                 >
                   <option value="">{t('common.district')}</option>
                   {region && districts[region as keyof typeof districts]?.map(d => (
@@ -340,7 +383,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onDemoAdminLogin }) => {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-black py-4 rounded-2xl shadow-lg shadow-blue-600/20 transition-all active:scale-95 uppercase tracking-widest text-xs mt-4"
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white font-black py-4 rounded-2xl shadow-xl shadow-blue-600/10 transition-all active:scale-95 uppercase tracking-widest text-xs mt-4"
               >
                 {loading ? <i className="fas fa-spinner fa-spin"></i> : 'Davom etish'}
               </button>

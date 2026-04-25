@@ -2,8 +2,14 @@
 export enum DefectType {
   POTHOLE = "Chuqur (Pothole)",
   CRACK = "Yoriq (Crack)",
+  RUTTING = "G'ildirak izi (Rutting)",
+  EROSION = "Emirilish",
   OBSTACLE = "To'siq (Obstacle)",
   FADED_MARKINGS = "O'chgan chiziqlar",
+  LIGHTING_ISSUE = "Yoritish nosozligi",
+  DRAINAGE_ISSUE = "Drenaj muammosi",
+  PEDESTRIAN_PATH = "Piyodalar yo'lagi nosozligi",
+  VEGETATION_DUST = "Ko'kalamzor/Chang muammosi",
   SMOOTH = "Tekis yo'l",
   UNKNOWN = "Noma'lum"
 }
@@ -117,6 +123,36 @@ export interface AnalysisResult {
     state: 'red' | 'green' | 'yellow' | 'none';
     distance?: number; // Estimated distance in meters
   };
+  radar?: {
+    detected: boolean;
+    type: 'fixed' | 'mobile';
+    limit: number;
+    distance: number;
+    confidence: number;
+  };
+  infrastructure?: {
+    lightingFunctional: boolean;
+    drainageClear: boolean;
+    markingsVisible: boolean;
+    pedestrianSafety: 'high' | 'medium' | 'low';
+    vegetationHealth?: 'good' | 'average' | 'poor';
+    dustLevel?: 'low' | 'moderate' | 'high';
+  };
+  predictiveData?: {
+    deteriorationRisk: 'low' | 'medium' | 'high';
+    monthsToFailure: number;
+    recommendedMaintenanceDate: number;
+  };
+}
+
+export interface DistrictMetric {
+  id: string;
+  name: string;
+  roadQualityIndex: number; // 0-100
+  signageCoverage: number; // percentage
+  lightingCoverage: number; // percentage
+  pendingRepairs: number;
+  lastUpdated: number;
 }
 
 export interface Report {

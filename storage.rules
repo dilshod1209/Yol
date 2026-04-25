@@ -1,0 +1,29 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Primary pattern for reports
+    match /reports/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (request.auth.uid == userId || 
+        request.auth.token.email == "dilshodallaberdiyev57@gmail.com" || 
+        request.auth.token.email == "admin@road.ai" ||
+        request.auth.uid == "7YahvuqrUVghLlnigHp79vYiuUg2"
+      );
+    }
+    // Fallback for legacy or root level writes for admins
+    match /reports/{allPaths=**} {
+       allow read, write: if request.auth != null && (
+         request.auth.token.email == "dilshodallaberdiyev57@gmail.com" || 
+         request.auth.token.email == "admin@road.ai" ||
+         request.auth.uid == "7YahvuqrUVghLlnigHp79vYiuUg2"
+       );
+    }
+    // Allow users to upload their own profile pictures if needed
+    match /users/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (request.auth.uid == userId || 
+        request.auth.token.email == "admin@road.ai"
+      );
+    }
+  }
+}

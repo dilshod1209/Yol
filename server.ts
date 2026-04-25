@@ -2,6 +2,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import fs from 'fs';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
@@ -14,6 +15,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'road-monitoring-secret-key';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
@@ -80,15 +84,32 @@ async function startServer() {
     const { email, password } = req.body;
 
     // Special case for root admin if not in DB
-    if (email === 'admin@system.com' && password === 'admin') {
-       const admin = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
+    if ((email === 'admin@system.com' || email === 'admin') && password === 'admin') {
+       const admin = db.prepare('SELECT * FROM users WHERE email = ?').get(email === 'admin' ? 'admin@system.com' : email) as any;
        if (!admin) {
           const id = 'admin_root';
           const hashedPassword = await bcrypt.hash('admin', 10);
           db.prepare(`
             INSERT INTO users (id, first_name, last_name, region, district, phone, personal_code, email, password, role, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(id, 'System', 'Admin', 'Toshkent shahri', 'Yunusobod tumani', '+998901234567', 'ADMIN001', email, hashedPassword, 'ADMIN', Date.now());
+          `).run(id, 'System', 'Admin', 'Toshkent shahri', 'Yunusobod tumani', '+998901234567', 'ADMIN001', 'admin@system.com', hashedPassword, 'ADMIN', Date.now());
+       }
+       
+       // Allow 'admin' to proceed as 'admin@system.com'
+       if (email === 'admin') {
+         const user = db.prepare('SELECT * FROM users WHERE email = ?').get('admin@system.com') as any;
+         const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
+         return res.json({
+           token,
+           user: {
+             id: user.id,
+             name: `${user.first_name} ${user.last_name}`,
+             email: user.email,
+             role: user.role,
+             region: user.region,
+             district: user.district
+           }
+         });
        }
     }
 
@@ -310,6 +331,7 @@ async function startServer() {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
+      configFile: path.resolve(__dirname, 'vite.config.ts'),
     });
     app.use(vite.middlewares);
   } else {

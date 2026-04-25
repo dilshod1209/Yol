@@ -1,6 +1,6 @@
 {
-  "name": "Yo'l Nosozliklarini Aniqlash Tizimi",
-  "description": "Sun'iy intellekt yordamida yo'l yuzasidagi muammolarni (chuqur, yoriq, to'siq) rasm yoki matn orqali aniqlash tizimi.",
+  "name": "RoadAI Neural Vision V2",
+  "description": "Global Command Center for hyper-realistic neural road monitoring and advanced infrastructure analytics.",
   "requestFramePermissions": [
     "camera",
     "geolocation"

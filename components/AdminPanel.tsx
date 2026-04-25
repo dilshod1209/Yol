@@ -7,6 +7,11 @@ import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLanguage } from '../src/lib/LanguageContext';
+import { auth, db, storage } from '../firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { analyzeRoadIssue } from '../geminiService';
+import { DistrictDashboard } from './DistrictDashboard';
 
 interface AdminPanelProps {
   allReports: Report[];
@@ -35,6 +40,72 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 }) => {
   const { t } = useLanguage();
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [manualLocation, setManualLocation] = useState('');
+  const [manualDescription, setManualDescription] = useState('');
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [globalNotification, setGlobalNotification] = useState({ title: '', message: '' });
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleManualUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentUser) return;
+
+    setIsUploading(true);
+    setUploadSuccess(false);
+    try {
+      // 1. Convert to base64 for Gemini
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+      const base64Image = await base64Promise;
+
+      // 2. Analyze with Gemini
+      const analysis = await analyzeRoadIssue(base64Image, 'manual');
+
+      // 3. Upload to Storage
+      const uid = auth.currentUser?.uid || currentUser.id;
+      const storageRef = ref(storage, `reports/${uid}/${Date.now()}_${file.name}`);
+      await uploadBytes(storageRef, file);
+      const imageUrl = await getDownloadURL(storageRef);
+
+      // 4. Save to Firestore
+      await addDoc(collection(db, 'reports'), {
+        userId: uid,
+        userName: `${currentUser.firstName} ${currentUser.lastName}`,
+        type: analysis.type,
+        severity: analysis.severity,
+        health: analysis.health,
+        description: manualDescription || analysis.description,
+        recommendation: analysis.recommendation,
+        imageUrl,
+        location: manualLocation,
+        region: manualLocation.split(',').pop()?.trim() || 'Toshkent',
+        status: ReportStatus.SUBMITTED,
+        createdAt: serverTimestamp(),
+        timestamp: Date.now(),
+        analysis: {
+          ...analysis,
+          infrastructure: analysis.infrastructure,
+          predictiveData: analysis.predictiveData
+        },
+        lat: currentLocation?.lat || 41.2995,
+        lng: currentLocation?.lng || 69.2401
+      });
+
+      setUploadSuccess(true);
+      setManualLocation('');
+      setManualDescription('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert(t('common.errorOccurred'));
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const statusTranslationKeys: Record<string, string> = {
     [ReportStatus.DRAFT]: 'draft',
@@ -55,8 +126,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const defectTypeTranslationKeys: Record<string, string> = {
     [DefectType.POTHOLE]: 'pothole',
     [DefectType.CRACK]: 'crack',
+    [DefectType.RUTTING]: 'rutting',
+    [DefectType.EROSION]: 'erosion',
     [DefectType.OBSTACLE]: 'obstacle',
     [DefectType.FADED_MARKINGS]: 'fadedMarkings',
+    [DefectType.LIGHTING_ISSUE]: 'lightingIssue',
+    [DefectType.DRAINAGE_ISSUE]: 'drainageIssue',
+    [DefectType.PEDESTRIAN_PATH]: 'pedestrianPath',
+    [DefectType.VEGETATION_DUST]: 'vegetationDust',
     [DefectType.SMOOTH]: 'smooth',
     [DefectType.UNKNOWN]: 'unknown',
   };
@@ -68,7 +145,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     [RoadHealth.POOR]: 'poor',
   };
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'users' | 'analytics' | 'regions' | 'notifications' | 'upload'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'reports' | 'users' | 'analytics' | 'notifications'>('reports');
   const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
   const [mapCenter, setMapCenter] = useState<Location | null>(null);
   const [reportFilter, setReportFilter] = useState<{ status: string; severity: string; region: string; search: string }>({
@@ -121,6 +198,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     const totalReports = filteredReports.length;
     const fixedReports = filteredReports.filter(r => r.status === ReportStatus.FIXED).length;
     const highRisk = filteredReports.filter(r => r.analysis.severity === Severity.HIGH).length;
+
+    // Infrastructure metrics
+    const signageAvg = filteredReports.filter(r => r.analysis.infrastructure?.markingsVisible).length / (totalReports || 1) * 100;
+    const lightingAvg = filteredReports.filter(r => r.analysis.infrastructure?.lightingFunctional).length / (totalReports || 1) * 100;
+    const drainageAvg = filteredReports.filter(r => r.analysis.infrastructure?.drainageClear).length / (totalReports || 1) * 100;
     
     const regionMap: Record<string, number> = {};
     filteredReports.forEach(r => {
@@ -138,8 +220,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       ? fixedWithTime.reduce((acc, r) => acc + ((r.fixedAt! - r.timestamp) / (1000 * 60 * 60)), 0) / fixedWithTime.length
       : 0;
     
-    return { totalReports, fixedReports, highRisk, regionStats, avgRepairTime, totalUsers: users.length };
+    return { totalReports, fixedReports, highRisk, regionStats, avgRepairTime, totalUsers: users.length, signageAvg, lightingAvg, drainageAvg };
   }, [filteredReports, users]);
+
+  const predictiveInsights = useMemo(() => {
+    const criticalRoads = filteredReports.filter(r => r.analysis.predictiveData?.deteriorationRisk === 'high' || (r.analysis.predictiveData?.monthsToFailure || 10) < 3);
+    const avgFailureMonths = filteredReports.reduce((acc, r) => acc + (r.analysis.predictiveData?.monthsToFailure || 12), 0) / (filteredReports.length || 1);
+    return { criticalRoads, avgFailureMonths };
+  }, [filteredReports]);
 
   const monthlyReportData = useMemo(() => {
     const now = new Date();
@@ -242,6 +330,253 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     XLSX.writeFile(wb, `road_reports_${Date.now()}.xlsx`);
   };
 
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'reports':
+        return (
+          <div className="space-y-8 animate-fade-in">
+            <div className="bg-slate-900/40 border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl backdrop-blur-md">
+               <div className="p-8 border-b border-white/5 flex flex-col md:flex-row justify-between items-center gap-6 bg-white/[0.02]">
+                  <div>
+                     <h3 className="text-xl font-black text-white uppercase tracking-tight">Ma'lumotlar Bazasi</h3>
+                     <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Sinxronlangan hisobotlar oqimi</p>
+                  </div>
+                  <div className="flex flex-wrap gap-4">
+                     <div className="relative group">
+                       <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 transition-colors group-focus-within:text-blue-500"></i>
+                       <input 
+                         type="text" 
+                         placeholder="Qidiruv..." 
+                         value={reportFilter.search}
+                         onChange={(e) => setReportFilter({...reportFilter, search: e.target.value})}
+                         className="bg-[#05070a] border border-white/10 rounded-xl pl-12 pr-6 py-3 text-xs text-white focus:border-blue-500 outline-none transition-all w-64 shadow-inner"
+                       />
+                     </div>
+                     <select 
+                       value={reportFilter.status}
+                       onChange={(e) => setReportFilter({...reportFilter, status: e.target.value})}
+                       className="bg-[#05070a] border border-white/10 rounded-xl px-6 py-3 text-[10px] font-black uppercase text-slate-400 focus:border-blue-500 outline-none transition-all cursor-pointer hover:bg-white/[0.02]"
+                     >
+                        <option value="all">Holat</option>
+                        {Object.values(ReportStatus).map(s => <option key={s} value={s}>{s}</option>)}
+                     </select>
+                  </div>
+               </div>
+
+               <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                     <thead>
+                        <tr className="bg-white/[0.01] text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] border-b border-white/5">
+                           <th className="px-8 py-6">ID / Sana</th>
+                           <th className="px-8 py-6">Muammo Turi</th>
+                           <th className="px-8 py-6">Hudud</th>
+                           <th className="px-8 py-6">Holat</th>
+                           <th className="px-8 py-6 text-right">Amallar</th>
+                        </tr>
+                     </thead>
+                     <tbody className="divide-y divide-white/5">
+                        {displayReports.map(report => (
+                          <motion.tr 
+                            key={report.id} 
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="group hover:bg-white/[0.01] transition-colors cursor-pointer"
+                            onClick={() => setSelectedReport(report)}
+                          >
+                             <td className="px-8 py-6">
+                                <p className="text-[10px] font-mono text-blue-500 mb-1">#{report.id.slice(0, 8)}</p>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase">{new Date(report.timestamp).toLocaleDateString()}</p>
+                             </td>
+                             <td className="px-8 py-6">
+                                <div className="flex items-center gap-4">
+                                   <div className="w-16 h-10 rounded-lg overflow-hidden border border-white/5 shadow-lg group-hover:scale-105 transition-transform">
+                                      <img src={report.image} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500" />
+                                   </div>
+                                   <div>
+                                      <p className="text-[10px] font-black text-slate-200 uppercase tracking-widest mb-1">{t(`common.${defectTypeTranslationKeys[report.analysis.type]}`)}</p>
+                                      <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${report.analysis.severity === Severity.HIGH ? 'bg-red-500/10 text-red-500' : 'bg-blue-500/10 text-blue-500'}`}>
+                                        {report.analysis.severity}
+                                      </span>
+                                   </div>
+                                </div>
+                             </td>
+                             <td className="px-8 py-6">
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-tight">{report.region}</p>
+                                <p className="text-[9px] text-slate-600 truncate max-w-[150px]">{report.address}</p>
+                             </td>
+                             <td className="px-8 py-6">
+                                <select 
+                                  value={report.status}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => onUpdateStatus(report.id, e.target.value as any)}
+                                  className="bg-transparent text-[9px] font-black uppercase text-blue-500 outline-none cursor-pointer hover:underline"
+                                >
+                                   {Object.values(ReportStatus).map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                             </td>
+                             <td className="px-8 py-6 text-right">
+                                <button className="w-8 h-8 rounded-lg bg-white/5 text-slate-600 hover:text-white transition-all"><i className="fas fa-expand-alt text-[10px]"></i></button>
+                             </td>
+                          </motion.tr>
+                        ))}
+                     </tbody>
+                  </table>
+               </div>
+            </div>
+          </div>
+        );
+      case 'users':
+        return (
+          <div className="animate-fade-in space-y-8">
+            <div className="bg-slate-900/40 border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl backdrop-blur-md">
+               <div className="p-8 border-b border-white/5 bg-white/[0.02] flex justify-between items-center">
+                  <div>
+                    <h3 className="text-xl font-black text-white tracking-tight uppercase">Tizim Foydalanuvchilari</h3>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Barcha darajadagi operatorlar nazorati</p>
+                  </div>
+                  <input 
+                    type="text" 
+                    placeholder="Qidirish (ism, tel, email)..." 
+                    value={userSearch}
+                    onChange={(e) => setUserSearch(e.target.value)}
+                    className="bg-[#05070a] border border-white/10 rounded-xl px-6 py-3 text-xs text-white focus:border-blue-500 outline-none transition-all w-80 shadow-inner"
+                  />
+               </div>
+               <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                     <thead>
+                        <tr className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] border-b border-white/5 bg-white/[0.01]">
+                           <th className="px-8 py-6">Operator</th>
+                           <th className="px-8 py-6">Roli / Aloqa</th>
+                           <th className="px-8 py-6">Hudud nazorati</th>
+                           <th className="px-8 py-6 text-right">Boshqaruv</th>
+                        </tr>
+                     </thead>
+                     <tbody className="divide-y divide-white/5">
+                        {filteredUsers.map(user => (
+                          <tr key={user.id} className="group hover:bg-white/[0.01] transition-colors">
+                             <td className="px-8 py-6">
+                                <div className="flex items-center gap-4">
+                                   <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center font-black text-blue-500 border border-blue-500/20 group-hover:scale-110 transition-transform shadow-inner">{user.firstName[0]}{user.lastName[0]}</div>
+                                   <div>
+                                      <p className="text-sm font-black text-white">{user.firstName} {user.lastName}</p>
+                                      <p className="text-[10px] text-slate-500 font-mono tracking-tighter">{user.email}</p>
+                                   </div>
+                                </div>
+                             </td>
+                             <td className="px-8 py-6">
+                                <div className="flex flex-col gap-1">
+                                  <span className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded w-fit ${user.role === UserRole.ADMIN ? 'bg-amber-500/10 text-amber-500' : 'bg-blue-500/10 text-blue-500'}`}>{user.role}</span>
+                                  <p className="text-xs font-black text-slate-400">{user.phone}</p>
+                                </div>
+                             </td>
+                             <td className="px-8 py-6 text-[10px] font-black text-slate-500 uppercase">{user.region || 'Barcha hududlar'}</td>
+                             <td className="px-8 py-6 text-right">
+                                <div className="flex justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                   <button 
+                                      onClick={() => onToggleBlock(user.id, !user.isBlocked)} 
+                                      className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${user.isBlocked ? 'bg-red-500 text-white shadow-[0_0_15px_rgba(239,68,68,0.4)]' : 'bg-white/5 text-slate-500 hover:text-white hover:bg-white/10'}`}
+                                      title={user.isBlocked ? 'Blokdan ochish' : 'Bloklash'}
+                                   >
+                                      <i className={`fas ${user.isBlocked ? 'fa-lock-open' : 'fa-lock'}`}></i>
+                                   </button>
+                                   <button onClick={() => onDeleteUser(user.id)} className="w-10 h-10 bg-white/5 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-xl flex items-center justify-center transition-all" title="Foydalanuvchini o'chirish"><i className="fas fa-user-xmark"></i></button>
+                                </div>
+                             </td>
+                          </tr>
+                        ))}
+                     </tbody>
+                  </table>
+               </div>
+            </div>
+          </div>
+        );
+      case 'analytics':
+        return (
+          <div className="animate-fade-in space-y-8">
+             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-[450px]">
+                <div className="bg-slate-900/40 border border-white/5 p-8 rounded-[3rem] shadow-2xl backdrop-blur-md">
+                   <h4 className="text-xs font-black text-white uppercase tracking-widest mb-12 flex items-center gap-3">
+                     <i className="fas fa-chart-donut text-blue-500"></i>
+                     Muammolar Segmenti
+                   </h4>
+                   <div className="h-[280px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                         <PieChart>
+                            <Pie data={analyticsData} dataKey="value" innerRadius={80} outerRadius={120} paddingAngle={12}>
+                               {analyticsData.map((e, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} stroke="rgba(255,255,255,0.05)" />)}
+                            </Pie>
+                            <Tooltip contentStyle={{ background: '#0a0f18', border: '1px solid #1e293b', borderRadius: '16px', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }} />
+                         </PieChart>
+                      </ResponsiveContainer>
+                   </div>
+                </div>
+                <div className="bg-slate-900/40 border border-white/5 p-8 rounded-[3rem] shadow-2xl backdrop-blur-md">
+                   <h4 className="text-xs font-black text-white uppercase tracking-widest mb-12 flex items-center gap-3">
+                     <i className="fas fa-chart-bar text-emerald-500"></i>
+                     Hududiy Distribyutsiya
+                   </h4>
+                   <div className="h-[280px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                         <BarChart data={stats.regionStats}>
+                            <CartesianGrid strokeDasharray="5 5" stroke="#ffffff08" vertical={false} />
+                            <XAxis dataKey="region" stroke="#475569" fontSize={8} tick={{ fontWeight: 'bold' }} tickFormatter={(val) => val.slice(0, 5)} />
+                            <YAxis stroke="#475569" fontSize={8} />
+                            <Tooltip cursor={{ fill: '#ffffff05' }} contentStyle={{ background: '#0a0f18', border: '1px solid #1e293b', borderRadius: '16px' }} />
+                            <Bar dataKey="count" fill="#3b82f6" radius={[6,6,0,0]}>
+                               {stats.regionStats.map((entry: any, index: number) => (
+                                 <Cell key={`cell-${index}`} fill={index === 0 ? '#3b82f6' : '#1e293b'} />
+                               ))}
+                            </Bar>
+                         </BarChart>
+                      </ResponsiveContainer>
+                   </div>
+                </div>
+             </div>
+          </div>
+        );
+      case 'notifications':
+        return (
+          <div className="max-w-2xl mx-auto p-12 bg-slate-900/40 border border-white/5 rounded-[3rem] shadow-2xl backdrop-blur-md animate-fade-in text-center flex flex-col items-center">
+             <div className="w-24 h-24 bg-blue-600/10 text-blue-500 rounded-[2.5rem] flex items-center justify-center text-4xl mb-8 shadow-inner border border-blue-500/20 rotate-12 transition-transform hover:rotate-0 duration-500"><i className="fas fa-paper-plane"></i></div>
+             <h3 className="text-4xl font-black text-white uppercase tracking-tighter mb-4">Global Bildirishnoma</h3>
+             <p className="text-slate-500 text-sm font-medium mb-12 max-w-sm">Barcha foydalanuvchilar ekraniga real vaqtda xabar yuborish</p>
+             
+             <div className="space-y-6 w-full">
+                <div className="text-left">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-3 pl-4">Sarlavha</label>
+                  <input 
+                    type="text" 
+                    value={globalNotification.title} 
+                    onChange={e => setGlobalNotification({...globalNotification, title: e.target.value})} 
+                    className="w-full bg-[#05070a]/50 border border-white/10 rounded-2xl p-5 text-sm text-white focus:border-blue-500 outline-none transition-all shadow-inner" 
+                    placeholder="Masalan: Tizim yangilanishi" 
+                  />
+                </div>
+                <div className="text-left">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-3 pl-4">Xabar matni</label>
+                  <textarea 
+                    rows={5} 
+                    value={globalNotification.message} 
+                    onChange={e => setGlobalNotification({...globalNotification, message: e.target.value})} 
+                    className="w-full bg-[#05070a]/50 border border-white/10 rounded-2xl p-5 text-sm text-white focus:border-blue-500 outline-none resize-none transition-all shadow-inner" 
+                    placeholder="Foydalanuvchilarga yetkazilishi kerak bo'lgan xabar..." 
+                  />
+                </div>
+                <button 
+                  onClick={() => { if(globalNotification.title && globalNotification.message) { onSendGlobalNotification(globalNotification.title, globalNotification.message); setGlobalNotification({title:'', message:''}); alert("Xabar yuborildi!"); } }} 
+                  className="w-full py-6 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-[0.3em] hover:bg-blue-500 transition-all shadow-2xl shadow-blue-600/30 active:scale-[0.98] mt-8"
+                >
+                  Barcha foydalanuvchilarga yuborish
+                </button>
+             </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="space-y-8 animate-fade-in pb-12">
       {selectedReport && (
@@ -314,6 +649,40 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
 
                 <div className="space-y-6 mb-8">
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Infratuzilma Holati (AI Tahlili)</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center space-x-3">
+                      <i className={`fas fa-lightbulb ${selectedReport.analysis.infrastructure?.lightingFunctional ? 'text-emerald-500' : 'text-red-500'}`}></i>
+                      <div>
+                        <p className="text-[8px] font-black text-slate-400 uppercase">Yoritish</p>
+                        <p className="text-[10px] font-bold text-slate-900">{selectedReport.analysis.infrastructure?.lightingFunctional ? 'Ishchi' : 'Nosoz'}</p>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center space-x-3">
+                      <i className={`fas fa-water ${selectedReport.analysis.infrastructure?.drainageClear ? 'text-emerald-500' : 'text-red-500'}`}></i>
+                      <div>
+                        <p className="text-[8px] font-black text-slate-400 uppercase">Drenaj</p>
+                        <p className="text-[10px] font-bold text-slate-900">{selectedReport.analysis.infrastructure?.drainageClear ? 'Toza' : 'To\'lgan'}</p>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center space-x-3">
+                      <i className={`fas fa-lines-leaning ${selectedReport.analysis.infrastructure?.markingsVisible ? 'text-emerald-500' : 'text-red-500'}`}></i>
+                      <div>
+                        <p className="text-[8px] font-black text-slate-400 uppercase">Chiziqlar</p>
+                        <p className="text-[10px] font-bold text-slate-900">{selectedReport.analysis.infrastructure?.markingsVisible ? 'Aniq' : 'O\'chgan'}</p>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center space-x-3">
+                      <i className={`fas fa-walking ${selectedReport.analysis.infrastructure?.pedestrianSafety === 'high' ? 'text-emerald-500' : 'text-amber-500'}`}></i>
+                      <div>
+                        <p className="text-[8px] font-black text-slate-400 uppercase">Piyoda xavfsizligi</p>
+                        <p className="text-[10px] font-bold text-slate-900 uppercase">{selectedReport.analysis.infrastructure?.pedestrianSafety}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-6 mb-8">
                   <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Iqtisodiy Hisob-kitob (Taxminiy)</h4>
                   <div className="bg-slate-50 rounded-3xl border border-slate-100 overflow-hidden">
                     <table className="w-full text-left text-[10px]">
@@ -375,831 +744,97 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         </AnimatePresence>
       )}
 
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-        <div>
-          <h2 className="text-3xl font-black text-slate-900 tracking-tight uppercase flex items-center">
-            <i className="fas fa-shield-halved mr-4 text-blue-600"></i>
-            {t('common.adminPanel')}
-          </h2>
-          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">{t('common.systemSecurity')}</p>
-        </div>
-        <div className="flex flex-wrap gap-4">
-          <button onClick={exportMonthlyReport} className="bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm">
-            <i className="fas fa-calendar-check mr-2"></i> {t('common.monthlyReport')}
-          </button>
-          <button onClick={exportToPDF} className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm">
-            <i className="fas fa-file-pdf mr-2"></i> {t('common.pdfExport')}
-          </button>
-          <button onClick={exportToExcel} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border border-emerald-200 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm">
-            <i className="fas fa-file-excel mr-2"></i> {t('common.excelExport')}
-          </button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex space-x-4 bg-white p-1.5 rounded-2xl border border-slate-200 w-fit shadow-sm overflow-x-auto">
-        <button 
-          onClick={() => setActiveTab('dashboard')}
-          className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          {t('common.dashboard')}
-        </button>
-        <button 
-          onClick={() => setActiveTab('reports')}
-          className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'reports' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          {t('common.reports')}
-        </button>
-        <button 
-          onClick={() => setActiveTab('regions')}
-          className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'regions' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          {t('common.regions')}
-        </button>
-        {(currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN || currentUser?.role === UserRole.MODERATOR) && (
-          <button 
-            onClick={() => setActiveTab('users')}
-            className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'users' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-          >
-            {t('common.users')}
-          </button>
-        )}
-        <button 
-          onClick={() => setActiveTab('analytics')}
-          className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'analytics' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          {t('common.analytics')}
-        </button>
-        <button 
-          onClick={() => setActiveTab('notifications')}
-          className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'notifications' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          {t('common.notifications')}
-        </button>
-        <button 
-          onClick={() => setActiveTab('upload')}
-          className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'upload' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          {t('common.fileUpload')}
-        </button>
-      </div>
-
-      {activeTab === 'dashboard' && (
-        <div className="space-y-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            <div className="bg-gradient-to-br from-blue-600 to-blue-700 p-8 rounded-[2.5rem] text-white shadow-xl">
-              <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-2">{t('common.totalReports')}</p>
-              <h3 className="text-4xl font-black">{stats.totalReports}</h3>
-              <div className="mt-4 flex items-center text-[10px] font-bold">
-                <i className="fas fa-arrow-up mr-2"></i> 12% {t('common.growth')}
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">{t('common.fixed')}</p>
-              <h3 className="text-4xl font-black text-slate-900">{stats.fixedReports}</h3>
-              <div className="mt-4 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                <div className="bg-emerald-500 h-full" style={{ width: `${(stats.fixedReports / stats.totalReports) * 100}%` }}></div>
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">{t('common.highRisk')}</p>
-              <h3 className="text-4xl font-black text-red-500">{stats.highRisk}</h3>
-              <p className="mt-4 text-[10px] font-bold text-slate-400 uppercase">{t('common.urgentAction')}</p>
-            </div>
-            <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">{t('common.users')}</p>
-              <h3 className="text-4xl font-black text-slate-900">{users.length}</h3>
-              <p className="mt-4 text-[10px] font-bold text-slate-400 uppercase">{t('common.totalRegistered')}</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 space-y-6">
-              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">{t('common.history')}</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {recentReports.map(report => (
-                  <div key={report.id} className="bg-white p-4 rounded-3xl border border-slate-200 flex space-x-4 hover:border-blue-500/30 transition-all shadow-sm">
-                    <img src={report.image} className="w-24 h-24 rounded-2xl object-cover border border-slate-100" />
-                    <div className="flex-1">
-                      <div className="flex justify-between items-start">
-                        <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">{t(`common.${defectTypeTranslationKeys[report.analysis.type]}`)}</h4>
-                        <div className="flex flex-col items-end gap-1">
-                          <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${report.analysis.severity === Severity.HIGH ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-500'}`}>
-                            {t(`common.${severityTranslationKeys[report.analysis.severity]}`)}
-                          </span>
-                          {(report.analysis.severity === Severity.HIGH || report.analysis.health === RoadHealth.POOR) && (
-                            <span className="text-[7px] font-black text-slate-400 uppercase tracking-tighter">
-                              {t('common.users')}: {report.userName}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <p className="text-[9px] text-slate-400 font-bold mt-1">{report.region}, {new Date(report.timestamp).toLocaleDateString()}</p>
-                      <p className="text-[10px] text-slate-600 line-clamp-2 mt-2 leading-tight">{report.analysis.description}</p>
-                    </div>
+      <div className="flex flex-col lg:flex-row min-h-screen lg:h-[calc(100vh-120px)] gap-6 overflow-y-auto lg:overflow-hidden p-4 lg:p-0">
+        {/* Navigation Sidebar (3D Lite) */}
+        <div className="w-full lg:w-80 flex flex-col gap-4 perspective-1000 order-2 lg:order-1">
+          <div className="flex-1 bg-slate-900 border border-white/5 rounded-[2.5rem] p-4 shadow-2xl space-y-2 backdrop-blur-xl">
+             <div className="px-6 py-4 mb-4 border-b border-white/5">
+                <p className="text-[10px] font-black text-blue-500 uppercase tracking-[0.4em]">Sistem Paneli</p>
+                <h1 className="text-white text-lg font-black uppercase tracking-tighter">ROADAI CORE</h1>
+             </div>
+             
+             {[
+               { id: 'reports', icon: 'fa-list-check', label: 'Hisobotlar' },
+               { id: 'users', icon: 'fa-user-gear', label: 'Operatorlar' },
+               { id: 'analytics', icon: 'fa-chart-mixed', label: 'Analitika' },
+               { id: 'notifications', icon: 'fa-bullhorn', label: 'Bildirishnomalar' },
+             ].filter(item => {
+               if (item.id === 'users') return (currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN || currentUser?.role === UserRole.MODERATOR);
+               if (item.id === 'notifications') return (currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN);
+               return true;
+             }).map((item) => (
+                <motion.button
+                  key={item.id}
+                  whileHover={{ rotateY: -10, x: 5, scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setActiveTab(item.id as any)}
+                  className={`w-full group px-6 py-5 rounded-2xl flex items-center gap-4 transition-all duration-300 transform-gpu ${
+                    activeTab === item.id 
+                      ? 'bg-blue-600 text-white shadow-[0_20px_40px_rgba(37,99,235,0.3)] translate-x-2' 
+                      : 'text-slate-500 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${
+                    activeTab === item.id ? 'bg-white/20' : 'bg-white/5'
+                  }`}>
+                    <i className={`fas ${item.icon} text-xs`}></i>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div className="flex justify-between items-center">
-                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">{t('common.regions')}</h3>
-                <button onClick={() => setActiveTab('regions')} className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline">{t('common.all')}</button>
-              </div>
-              <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm">
-                <div className="space-y-6">
-                  {stats.regionStats.slice(0, 5).map((r: any) => (
-                    <button 
-                      key={r.region} 
-                      onClick={() => { setSelectedRegion(r.region); setActiveTab('regions'); }}
-                      className="w-full text-left group"
-                    >
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-[10px] font-black text-slate-900 uppercase tracking-widest group-hover:text-blue-600 transition-colors">{r.region}</span>
-                        <span className="text-[10px] font-black text-blue-600">{r.count}</span>
-                      </div>
-                      <div className="w-full bg-slate-50 h-2 rounded-full overflow-hidden">
-                        <div className="bg-blue-600 h-full group-hover:bg-blue-500 transition-all" style={{ width: `${(r.count / stats.totalReports) * 100}%` }}></div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'regions' && (
-        <div className="space-y-8 animate-slide-up">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            <div className="lg:col-span-4 space-y-4">
-              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight mb-6">{t('common.regions')}</h3>
-              <div className="bg-white border border-slate-200 rounded-[2.5rem] p-4 shadow-sm max-h-[600px] overflow-y-auto">
-                {stats.regionStats.map((r: any) => (
-                  <button
-                    key={r.region}
-                    onClick={() => setSelectedRegion(r.region)}
-                    className={`w-full flex items-center justify-between p-4 rounded-2xl mb-2 transition-all ${selectedRegion === r.region ? 'bg-blue-600 text-white shadow-lg scale-[1.02]' : 'hover:bg-slate-50 text-slate-600'}`}
-                  >
-                    <div className="flex items-center space-x-4">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${selectedRegion === r.region ? 'bg-white/20' : 'bg-blue-50 text-blue-600'}`}>
-                        <i className="fas fa-location-dot"></i>
-                      </div>
-                      <span className="text-xs font-black uppercase tracking-widest">{r.region}</span>
-                    </div>
-                    <span className={`text-xs font-black ${selectedRegion === r.region ? 'text-white' : 'text-blue-600'}`}>{r.count}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="lg:col-span-8 space-y-8">
-              {selectedRegion ? (
-                <div className="space-y-8 animate-fade-in">
-                  <div className="flex items-center space-x-4 mb-4">
-                    <button onClick={() => setSelectedRegion(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                      <i className="fas fa-arrow-left text-slate-400"></i>
-                    </button>
-                    <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Orqaga</span>
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-sm">
-                    <div className="flex items-center justify-between mb-8">
-                      <div>
-                        <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tight">{selectedRegion}</h3>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Hududiy tahlil va monitoring</p>
-                      </div>
-                      <div className="bg-blue-50 px-6 py-3 rounded-2xl border border-blue-100">
-                        <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Jami nosozliklar: {stats.regionStats.find(r => r.region === selectedRegion)?.count || 0}</span>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                      <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Tuzatilgan</p>
-                        <p className="text-2xl font-black text-slate-900">
-                          {filteredReports.filter(r => r.region === selectedRegion && r.status === ReportStatus.FIXED).length}
-                        </p>
-                      </div>
-                      <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Jarayonda</p>
-                        <p className="text-2xl font-black text-slate-900">
-                          {filteredReports.filter(r => r.region === selectedRegion && (r.status === ReportStatus.IN_REPAIR || r.status === ReportStatus.UNDER_REVIEW)).length}
-                        </p>
-                      </div>
-                      <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Yuqori Xavf</p>
-                        <p className="text-2xl font-black text-red-500">
-                          {filteredReports.filter(r => r.region === selectedRegion && r.analysis.severity === Severity.HIGH).length}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="h-[400px] rounded-[2rem] overflow-hidden border border-slate-200 shadow-inner">
-                      <MapDisplay 
-                        currentLocation={filteredReports.find(r => r.region === selectedRegion)?.location || { lat: 41.2995, lng: 69.2401 }}
-                        reports={filteredReports.filter(r => r.region === selectedRegion)} 
-                        onReportClick={setSelectedReport}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-6">
-                    <h4 className="text-xs font-black text-slate-900 uppercase tracking-[0.2em]">Hududdagi So'nggi Hisobotlar</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {filteredReports
-                        .filter(r => r.region === selectedRegion)
-                        .slice(0, 4)
-                        .map(report => (
-                          <div key={report.id} className="bg-white p-4 rounded-3xl border border-slate-200 flex space-x-4 shadow-sm">
-                            <img src={report.image} className="w-20 h-20 rounded-2xl object-cover" />
-                            <div className="flex-1">
-                              <h5 className="text-[10px] font-black text-slate-900 uppercase tracking-tight">{report.analysis.type}</h5>
-                              <p className="text-[9px] text-slate-400 font-bold mt-1">{new Date(report.timestamp).toLocaleDateString()}</p>
-                              <div className="mt-2 flex items-center justify-between">
-                                <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${report.status === ReportStatus.FIXED ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
-                                  {report.status}
-                                </span>
-                                {(report.analysis.severity === Severity.HIGH || report.analysis.health === RoadHealth.POOR) && (
-                                  <span className="text-[7px] font-black text-slate-400 uppercase tracking-tighter">
-                                    {report.userName}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fade-in">
-                  <div className="lg:col-span-8 h-[500px] bg-slate-50 rounded-[2.5rem] border border-slate-200 overflow-hidden relative shadow-inner">
-                    <div className="absolute top-6 left-6 z-10 bg-white/80 backdrop-blur-md p-4 rounded-2xl border border-slate-100 shadow-xl">
-                      <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest mb-1">O'zbekiston Yo'l Xaritasi</h4>
-                      <p className="text-[8px] text-slate-400 font-bold uppercase">Viloyatlar bo'yicha monitoring</p>
-                    </div>
-                    <MapDisplay 
-                      currentLocation={currentLocation || { lat: 41.3775, lng: 64.5853 }} 
-                      reports={filteredReports}
-                    />
-                  </div>
-                  <div className="lg:col-span-4 grid grid-cols-1 gap-4 overflow-y-auto max-h-[500px] pr-2 custom-scrollbar">
-                    {stats.regionStats.map((r: any, idx: number) => (
-                      <div 
-                        key={r.region} 
-                        className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-sm hover:shadow-md transition-all cursor-pointer group animate-slide-up"
-                        style={{ animationDelay: `${idx * 50}ms` }}
-                        onClick={() => setSelectedRegion(r.region)}
-                      >
-                        <div className="flex justify-between items-start mb-4">
-                          <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all">
-                            <i className="fas fa-map-location-dot"></i>
-                          </div>
-                          <span className="text-xl font-black text-slate-900">{r.count}</span>
-                        </div>
-                        <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-tight mb-2">{r.region}</h4>
-                        <div className="w-full bg-slate-50 h-1.5 rounded-full overflow-hidden">
-                          <div className="bg-blue-600 h-full" style={{ width: `${(r.count / stats.totalReports) * 100}%` }}></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'notifications' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-slide-up">
-          <div className="bg-white border border-slate-200 rounded-[2.5rem] p-10 shadow-xl">
-            <div className="flex items-center space-x-4 mb-8">
-              <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600">
-                <i className="fas fa-bullhorn text-xl"></i>
-              </div>
-              <div>
-                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">{t('common.notifications')}</h3>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">{t('common.send')} {t('common.all')}</p>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block ml-2">{t('common.status')}</label>
-                <input 
-                  type="text" 
-                  value={notifTitle}
-                  onChange={(e) => setNotifTitle(e.target.value)}
-                  placeholder={t('common.status')}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-6 text-sm text-slate-900 focus:outline-none focus:border-blue-600 transition-all font-medium"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block ml-2">{t('common.reports')}</label>
-                <textarea 
-                  value={notifMessage}
-                  onChange={(e) => setNotifMessage(e.target.value)}
-                  placeholder={t('common.reports')}
-                  rows={5}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-6 text-sm text-slate-900 focus:outline-none focus:border-blue-600 transition-all font-medium resize-none"
-                ></textarea>
-              </div>
-
-              <button 
-                onClick={async () => {
-                  if (!notifTitle || !notifMessage) {
-                    alert("Iltimos, barcha maydonlarni to'ldiring");
-                    return;
-                  }
-                  setIsSending(true);
-                  await onSendGlobalNotification(notifTitle, notifMessage);
-                  setNotifTitle('');
-                  setNotifMessage('');
-                  setIsSending(false);
-                }}
-                disabled={isSending}
-                className={`w-full py-5 rounded-2xl text-xs font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center space-x-3 ${isSending ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20'}`}
-              >
-                {isSending ? (
-                  <>
-                    <i className="fas fa-spinner fa-spin"></i>
-                    <span>{t('common.analyzing')}</span>
-                  </>
-                ) : (
-                  <>
-                    <i className="fas fa-paper-plane"></i>
-                    <span>{t('common.send')}</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            <div className="mt-8 p-6 bg-amber-50 rounded-3xl border border-amber-100">
-              <div className="flex space-x-3">
-                <i className="fas fa-circle-info text-amber-500 mt-1"></i>
-                <p className="text-[10px] text-amber-700 font-bold leading-relaxed uppercase tracking-tight">
-                  {t('common.notifications')} {t('common.all')}. {t('common.noDefects')}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-[2.5rem] p-10 shadow-sm overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between mb-8">
-              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">{t('common.history')}</h3>
-              <span className="bg-blue-50 text-blue-600 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">{t('common.global')}</span>
-            </div>
-            <div className="space-y-4 overflow-y-auto max-h-[600px] pr-2 custom-scrollbar">
-              {notifications.filter(n => n.userId === 'global' || n.userId === 'admin').length === 0 ? (
-                <div className="p-12 text-center text-slate-300">
-                  <i className="fas fa-history text-4xl mb-4 opacity-20"></i>
-                  <p className="text-[10px] font-black uppercase tracking-widest">{t('common.noDefects')}</p>
-                </div>
-              ) : (
-                notifications.filter(n => n.userId === 'global' || n.userId === 'admin').map(notif => (
-                  <div key={notif.id} className={`p-6 rounded-3xl border animate-fade-in ${notif.userId === 'admin' ? 'bg-red-50 border-red-100' : 'bg-slate-50 border-slate-100'}`}>
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">{notif.title}</h4>
-                        {notif.userId === 'admin' && (
-                          <span className="bg-red-600 text-white text-[6px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest">{t('common.system')}</span>
-                        )}
-                      </div>
-                      <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(notif.timestamp).toLocaleString()}</span>
-                    </div>
-                    <p className="text-[10px] text-slate-600 leading-relaxed font-medium">{notif.message}</p>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'reports' && (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            <div className="bg-white border border-slate-200 px-6 py-6 rounded-[2rem] flex items-center space-x-4 shadow-sm">
-               <div className="bg-blue-50 p-4 rounded-2xl text-blue-600">
-                  <i className="fas fa-database text-2xl"></i>
-               </div>
-               <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('common.totalReports')}</p>
-                  <p className="text-2xl font-black text-slate-900">{stats.totalReports}</p>
-               </div>
-            </div>
-            <div className="bg-white border border-slate-200 px-6 py-6 rounded-[2rem] flex items-center space-x-4 shadow-sm">
-               <div className="bg-emerald-50 p-4 rounded-2xl text-emerald-600">
-                  <i className="fas fa-check-double text-2xl"></i>
-               </div>
-               <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('common.fixed')}</p>
-                  <p className="text-2xl font-black text-slate-900">{stats.fixedReports}</p>
-               </div>
-            </div>
-            <div className="bg-white border border-slate-200 px-6 py-6 rounded-[2rem] flex items-center space-x-4 shadow-sm">
-               <div className="bg-red-50 p-4 rounded-2xl text-red-600">
-                  <i className="fas fa-radiation text-2xl animate-pulse"></i>
-               </div>
-               <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('common.highRisk')}</p>
-                  <p className="text-2xl font-black text-slate-900">{stats.highRisk}</p>
-               </div>
-            </div>
-            <div className="bg-white border border-slate-200 px-6 py-6 rounded-[2rem] flex items-center space-x-4 shadow-sm">
-               <div className="bg-purple-50 p-4 rounded-2xl text-purple-600">
-                  <i className="fas fa-users text-2xl"></i>
-               </div>
-               <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('common.users')}</p>
-                  <p className="text-2xl font-black text-slate-900">{stats.totalUsers}</p>
-               </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mt-8">
-            <div className="lg:col-span-8 h-[500px] bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden relative shadow-sm">
-               <div className="absolute top-6 left-6 z-10 bg-white/80 backdrop-blur-md p-4 rounded-2xl border border-slate-100 shadow-xl">
-                  <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest mb-1">{t('common.regions')}</h4>
-                  <p className="text-[8px] text-slate-400 font-bold uppercase">{t('common.all')} {t('common.reports')}</p>
-               </div>
-               <div className="w-full h-full">
-                  {filteredReports.length > 0 && filteredReports[0].location ? (
-                    <MapDisplay 
-                      currentLocation={filteredReports[0].location} 
-                      reports={filteredReports}
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-slate-300 font-black uppercase text-xs tracking-widest">
-                       {t('common.noDefects')}
-                    </div>
+                  <span className="text-[11px] font-black uppercase tracking-widest flex-1">{item.label}</span>
+                  {activeTab === item.id && (
+                    <div className="w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_10px_#fff]"></div>
                   )}
-               </div>
-            </div>
+                </motion.button>
+             ))}
+          </div>
 
-            <div className="lg:col-span-4 space-y-4">
-               <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm">
-                  <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-4 flex items-center">
-                     <i className="fas fa-location-dot mr-2 text-blue-600"></i>
-                     {t('common.regions')}
-                  </h4>
-                  <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                     {stats.regionStats.map((r: any) => (
-                       <div key={r.region} className="flex justify-between items-center">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">{r.region}</span>
-                          <span className="text-xs font-black text-slate-900">{r.count}</span>
-                       </div>
-                     ))}
-                  </div>
-               </div>
+          <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-[2.5rem] relative overflow-hidden group shadow-2xl">
+             <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-20 capitalize"></div>
+             <div className="relative z-10 flex flex-col items-center text-center">
+                <div className="w-16 h-16 bg-white/10 rounded-full flex items-center justify-center mb-4 backdrop-blur-md shadow-inner">
+                   <div className="w-8 h-8 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_20px_rgba(52,211,153,0.6)]"></div>
+                </div>
+                <p className="text-[10px] font-black text-blue-200 uppercase tracking-widest mb-1">Tizim Holati</p>
+                <h4 className="text-white font-black uppercase tracking-tighter">Sinxronlangan</h4>
+             </div>
+          </div>
+        </div>
 
-               {selectedReport && (
-                 <div className="bg-white p-6 rounded-[2rem] border border-blue-200 animate-fade-in shadow-xl">
-                    <div className="flex justify-between items-start mb-4">
-                       <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">{t('common.reportDetails')}</h4>
-                       <button onClick={() => setSelectedReport(null)} className="text-slate-400 hover:text-slate-600"><i className="fas fa-times"></i></button>
-                    </div>
-                    <img src={selectedReport.image} className="w-full h-32 object-cover rounded-xl mb-4 border border-slate-100" />
-                    
-                    <div className="w-full h-32 rounded-xl overflow-hidden mb-4 border border-slate-200 relative z-0">
-                      <MapDisplay 
-                        currentLocation={selectedReport.location} 
-                        reports={[selectedReport]}
-                      />
-                    </div>
-
-                    <div className="space-y-3">
-                       <div>
-                          <p className="text-[8px] font-black text-slate-400 uppercase">{t('common.roadName')}</p>
-                          <p className="text-[10px] text-slate-900 font-bold mb-2">{selectedReport.location.address || `${selectedReport.location.lat.toFixed(4)}, ${selectedReport.location.lng.toFixed(4)}`}</p>
-                          <p className="text-[8px] font-black text-slate-400 uppercase">{t('common.description')}</p>
-                          <p className="text-[10px] text-slate-600 leading-relaxed">{selectedReport.analysis.description}</p>
-                       </div>
-                    </div>
+        {/* Main Content Area */}
+        <div className="flex-1 flex flex-col gap-6 order-1 lg:order-2 overflow-hidden">
+           {/* Top Bar */}
+           <div className="bg-slate-900 border border-white/5 rounded-[2.5rem] p-6 flex items-center justify-between shadow-2xl backdrop-blur-xl">
+              <div className="flex items-center gap-6">
+                 <div className="flex flex-col">
+                    <h2 className="text-white text-xl font-black uppercase tracking-tighter leading-none">{activeTab}</h2>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Boshqaruv Markazi</p>
                  </div>
-               )}
-            </div>
-          </div>
+              </div>
+              <div className="flex items-center gap-3">
+                 <button onClick={exportToPDF} title="PDF Eksport" className="w-12 h-12 rounded-2xl bg-white/5 text-slate-400 hover:bg-red-500 hover:text-white transition-all flex items-center justify-center border border-white/5 group relative overflow-hidden">
+                   <div className="absolute inset-0 bg-red-500 opacity-0 group-hover:opacity-10 transition-opacity"></div>
+                   <i className="fas fa-file-pdf relative z-10"></i>
+                 </button>
+                 <button onClick={exportToExcel} title="Excel Eksport" className="w-12 h-12 rounded-2xl bg-white/5 text-slate-400 hover:bg-emerald-500 hover:text-white transition-all flex items-center justify-center border border-white/5 group relative overflow-hidden">
+                   <div className="absolute inset-0 bg-emerald-500 opacity-0 group-hover:opacity-10 transition-opacity"></div>
+                   <i className="fas fa-file-excel relative z-10"></i>
+                 </button>
+                 <div className="h-8 w-[1px] bg-white/10 mx-2"></div>
+                 <div className="flex items-center gap-4 bg-white/5 px-6 py-3 rounded-2xl border border-white/5 transition-all hover:bg-white/10 cursor-pointer">
+                    <div className="text-right">
+                       <p className="text-[10px] font-black text-white uppercase leading-none">{currentUser?.firstName}</p>
+                       <p className="text-[8px] text-blue-500 font-bold uppercase tracking-widest mt-1">{currentUser?.role}</p>
+                    </div>
+                    <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center font-black text-white shadow-lg text-xs">{currentUser?.firstName?.[0]}</div>
+                 </div>
+              </div>
+           </div>
 
-          <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm mt-8">
-            <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-               <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">{t('common.reports')} {t('common.dashboard')}</h3>
-               <div className="flex flex-wrap gap-2 w-full md:w-auto">
-                  <div className="relative flex-grow md:flex-grow-0">
-                    <input 
-                      type="text"
-                      value={reportFilter.search}
-                      onChange={(e) => setReportFilter(prev => ({ ...prev, search: e.target.value }))}
-                      placeholder={t('common.search') + "..."}
-                      className="bg-white border border-slate-200 text-[10px] font-bold text-slate-600 rounded-lg pl-8 pr-3 py-2 w-full focus:outline-none focus:border-blue-500"
-                    />
-                    <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]"></i>
-                  </div>
-                  <select 
-                    value={reportFilter.status}
-                    onChange={(e) => setReportFilter(prev => ({ ...prev, status: e.target.value }))}
-                    className="bg-white border border-slate-200 text-[9px] font-black uppercase text-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="all">{t('common.all')} {t('common.status')}</option>
-                    {Object.values(ReportStatus).map(status => (
-                      <option key={status} value={status}>{t(`common.${statusTranslationKeys[status]}`)}</option>
-                    ))}
-                  </select>
-                  <select 
-                    value={reportFilter.severity}
-                    onChange={(e) => setReportFilter(prev => ({ ...prev, severity: e.target.value }))}
-                    className="bg-white border border-slate-200 text-[9px] font-black uppercase text-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="all">{t('common.all')} {t('common.highRisk')}</option>
-                    {Object.values(Severity).map(sev => (
-                      <option key={sev} value={sev}>{t(`common.${severityTranslationKeys[sev]}`)}</option>
-                    ))}
-                  </select>
-                  <select 
-                    value={reportFilter.region}
-                    onChange={(e) => setReportFilter(prev => ({ ...prev, region: e.target.value }))}
-                    className="bg-white border border-slate-200 text-[9px] font-black uppercase text-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="all">{t('common.all')} {t('common.regions')}</option>
-                    {stats.regionStats.map(r => (
-                      <option key={r.region} value={r.region}>{r.region}</option>
-                    ))}
-                  </select>
-               </div>
-            </div>
-            
-            {displayReports.length === 0 ? (
-              <div className="p-32 text-center text-slate-300">
-                <p className="font-black uppercase tracking-[0.2em] text-[10px]">{t('common.noDefects')}</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
-                      <th className="p-6">{t('common.users')}</th>
-                      <th className="p-6">{t('common.reports')}</th>
-                      <th className="p-6">{t('common.region')}</th>
-                      <th className="p-6 text-right">{t('common.actions')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {displayReports.map(report => (
-                      <tr key={report.id} className="hover:bg-blue-50/50 transition-all group">
-                        <td className="p-6">
-                          <div className="flex items-center space-x-4">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <p className="text-sm font-black text-slate-900">{report.userName}</p>
-                                {(report.analysis.severity === Severity.HIGH || report.analysis.health === RoadHealth.POOR) && (
-                                  <span className="bg-red-500 text-white text-[6px] font-black px-1 py-0.5 rounded uppercase tracking-tighter animate-pulse">
-                                    {t('common.highRisk')}
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-[9px] text-slate-400 uppercase font-black">{new Date(report.timestamp).toLocaleDateString()}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="p-6">
-                          <div className="flex items-center space-x-3">
-                             <img src={report.image} className="w-10 h-10 rounded-lg object-cover border border-slate-100" />
-                             <span className="text-xs font-bold text-slate-600">{t(`common.${defectTypeTranslationKeys[report.analysis.type]}`)}</span>
-                          </div>
-                        </td>
-                        <td className="p-6">
-                          <span className="text-xs font-black text-blue-600">{report.region}</span>
-                        </td>
-                        <td className="p-6 text-right">
-                          <div className="flex justify-end space-x-2">
-                            <select 
-                              value={report.status}
-                              onChange={(e) => onUpdateStatus(report.id, e.target.value as ReportStatus)}
-                              className="bg-white border border-slate-200 text-[9px] font-black uppercase text-slate-600 rounded-lg px-2 py-1 focus:outline-none focus:border-blue-500"
-                            >
-                              {Object.values(ReportStatus).map(status => (
-                                <option key={status} value={status}>{t(`common.${statusTranslationKeys[status]}`)}</option>
-                              ))}
-                            </select>
-                            <button 
-                              onClick={() => setSelectedReport(report)}
-                              className="w-10 h-10 flex items-center justify-center text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
-                            >
-                              <i className="fas fa-eye text-sm"></i>
-                            </button>
-                            <button 
-                              onClick={() => onDelete(report.id)}
-                              className="w-10 h-10 flex items-center justify-center text-red-600 hover:bg-red-50 rounded-xl transition-all"
-                            >
-                              <i className="fas fa-trash text-sm"></i>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-      {activeTab === 'users' && (
-        <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm">
-          <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">{t('common.users')} {t('common.dashboard')}</h3>
-            <div className="relative w-full md:w-64">
-              <input 
-                type="text"
-                value={userSearch}
-                onChange={(e) => setUserSearch(e.target.value)}
-                placeholder={t('common.search') + "..."}
-                className="w-full bg-white border border-slate-200 text-[10px] font-bold text-slate-600 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:border-blue-500"
-              />
-              <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]"></i>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
-                  <th className="p-6">{t('common.users')}</th>
-                  <th className="p-6">{t('common.region')} / {t('common.district')}</th>
-                  <th className="p-6">{t('common.phone')} / ID</th>
-                  <th className="p-6">{t('common.status')}</th>
-                  <th className="p-6 text-right">{t('common.actions')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredUsers.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-12 text-center text-slate-300">
-                      <p className="font-black uppercase tracking-[0.2em] text-[10px]">{t('common.users')} topilmadi.</p>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredUsers.map(user => (
-                    <tr key={user.id} className="hover:bg-blue-50/50 transition-all">
-                      <td className="p-6">
-                        <div className="flex items-center space-x-4">
-                          <div className={`w-2 h-2 rounded-full ${user.isOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-300'}`}></div>
-                          <div>
-                            <p className="text-sm font-black text-slate-900">{user.firstName} {user.lastName}</p>
-                            <p className="text-[9px] text-slate-400 font-black">{user.email}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-6">
-                         <p className="text-xs font-black text-slate-600">{user.region}</p>
-                         <p className="text-[9px] text-slate-400 uppercase font-bold">{user.district}</p>
-                      </td>
-                      <td className="p-6">
-                         <p className="text-xs font-black text-blue-600">{user.phone}</p>
-                         <p className="text-[9px] text-slate-400 uppercase font-bold">{user.personalCode}</p>
-                      </td>
-                      <td className="p-6">
-                        <div className="flex flex-col space-y-1">
-                          <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase w-fit ${user.isOnline ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>
-                            {user.isOnline ? t('common.online') : t('common.offline')}
-                          </span>
-                          {user.isCameraActive && (
-                            <span className="text-[8px] font-black px-2 py-0.5 rounded uppercase w-fit bg-red-50 text-red-600 animate-pulse">
-                              <i className="fas fa-video mr-1"></i> {t('common.camera')} Aktiv
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-6 text-right">
-                        <div className="flex justify-end space-x-2">
-                          <button 
-                            onClick={() => onToggleBlock(user.id)}
-                            className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all ${user.isBlocked ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
-                            title={user.isBlocked ? t('common.all') : t('common.highRisk')}
-                          >
-                            <i className={`fas ${user.isBlocked ? 'fa-user-check' : 'fa-user-slash'}`}></i>
-                          </button>
-                          <button 
-                            onClick={() => onDeleteUser(user.id)}
-                            className="w-10 h-10 flex items-center justify-center text-slate-400 hover:bg-red-50 hover:text-red-600 rounded-xl transition-all"
-                            title={t('common.delete')}
-                          >
-                            <i className="fas fa-user-minus"></i>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+           {/* Dynamic Content Container */}
+           <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar pb-12">
+              {renderContent()}
+           </div>
         </div>
-      )}
-      {activeTab === 'analytics' && (
-        <div className="space-y-8 animate-slide-up">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">{t('common.status')}</h3>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={analyticsData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={100}
-                      paddingAngle={5}
-                      dataKey="value"
-                    >
-                      {analyticsData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px' }}
-                      itemStyle={{ color: '#0f172a', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-              <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">{t('common.highRisk')}</h3>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={severityData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={100}
-                      paddingAngle={5}
-                      dataKey="value"
-                    >
-                      {severityData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={SEVERITY_COLORS[index % SEVERITY_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px' }}
-                      itemStyle={{ color: '#0f172a', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white border border-slate-200 p-8 rounded-[2.5rem] shadow-sm">
-            <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-8">{t('common.regions')}</h3>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.regionStats}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                  <XAxis 
-                    dataKey="region" 
-                    stroke="#94a3b8" 
-                    fontSize={8} 
-                    tickFormatter={(val) => val.substring(0, 5)}
-                    tick={{ fontWeight: 'bold' }}
-                  />
-                  <YAxis stroke="#94a3b8" fontSize={8} tick={{ fontWeight: 'bold' }} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px' }}
-                    itemStyle={{ color: '#0f172a', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}
-                  />
-                  <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-      )}
-      {activeTab === 'upload' && (
-        <div className="bg-white border border-slate-200 p-12 rounded-[3rem] shadow-xl flex flex-col items-center justify-center min-h-[500px]">
-          <div className="w-24 h-24 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 mb-8">
-            <i className="fas fa-cloud-upload-alt text-4xl"></i>
-          </div>
-          <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tight mb-4">{t('common.fileUpload')}</h3>
-          <p className="text-slate-400 text-sm font-bold mb-12 max-w-md text-center">
-            {t('common.fileUpload')} {t('common.dashboard')}. {t('common.noDefects')}
-          </p>
-          <button 
-            onClick={() => {
-              alert(t('common.fileUpload') + " " + t('common.monitoring'));
-            }}
-            className="bg-blue-600 text-white px-12 py-5 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20"
-          >
-            {t('common.monitoring')}
-          </button>
-        </div>
-      )}
+      </div>
     </div>
   );
 };

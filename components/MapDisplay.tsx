@@ -1,5 +1,6 @@
 
 import React, { useEffect, useRef } from 'react';
+import L from 'leaflet';
 import { LocationData, RouteData, Report, ReportStatus, Severity } from '../types';
 
 interface MapDisplayProps {
@@ -18,19 +19,19 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ currentLocation, origin, destin
 
   useEffect(() => {
     if (mapContainer.current && !mapInstance.current) {
-      // @ts-ignore
-      mapInstance.current = L.map(mapContainer.current, {
-        zoomControl: false,
-        attributionControl: false
-      }).setView([currentLocation.lat, currentLocation.lng], 15);
-      
-      // @ts-ignore
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19
-      }).addTo(mapInstance.current);
+      // Defensive check for already initialized container
+      if (!(mapContainer.current as any)._leaflet_id) {
+        mapInstance.current = L.map(mapContainer.current, {
+          zoomControl: false,
+          attributionControl: false
+        }).setView([currentLocation.lat, currentLocation.lng], 15);
+        
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+          maxZoom: 19
+        }).addTo(mapInstance.current);
 
-      // @ts-ignore
-      markersGroup.current = L.layerGroup().addTo(mapInstance.current);
+        markersGroup.current = L.layerGroup().addTo(mapInstance.current);
+      }
     }
 
     return () => {
@@ -48,26 +49,22 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ currentLocation, origin, destin
     markersGroup.current.clearLayers();
 
     // User Marker (Current Location)
-    // @ts-ignore
     const userIcon = L.divIcon({
       className: 'custom-div-icon',
       html: `<div class="w-4 h-4 bg-blue-500 rounded-full border-2 border-white shadow-[0_0_10px_rgba(59,130,246,0.8)] animate-pulse"></div>`,
       iconSize: [16, 16],
       iconAnchor: [8, 8]
     });
-    // @ts-ignore
     L.marker([currentLocation.lat, currentLocation.lng], { icon: userIcon }).addTo(markersGroup.current);
 
     // Origin Marker (if different from current location)
     if (origin) {
-      // @ts-ignore
       const originIcon = L.divIcon({
         className: 'custom-div-icon',
         html: `<div class="text-blue-600 text-xl"><i class="fas fa-circle-dot"></i></div>`,
         iconSize: [20, 20],
         iconAnchor: [10, 10]
       });
-      // @ts-ignore
       L.marker([origin.lat, origin.lng], { icon: originIcon }).addTo(markersGroup.current);
     }
 
@@ -93,7 +90,6 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ currentLocation, origin, destin
             iconSize: [12, 12],
             iconAnchor: [6, 6]
           });
-          // @ts-ignore
           const marker = L.marker([report.location.lat, report.location.lng], { icon: reportIcon }).addTo(markersGroup.current);
           
           const popupContent = `
@@ -121,14 +117,12 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ currentLocation, origin, destin
 
     if (destination) {
       // Destination Marker
-      // @ts-ignore
       const destIcon = L.divIcon({
         className: 'custom-div-icon',
         html: `<div class="text-red-500 text-2xl"><i class="fas fa-map-marker-alt"></i></div>`,
         iconSize: [24, 24],
         iconAnchor: [12, 24]
       });
-      // @ts-ignore
       L.marker([destination.lat, destination.lng], { icon: destIcon }).addTo(markersGroup.current);
       
       const start = origin || currentLocation;
@@ -185,7 +179,6 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ currentLocation, origin, destin
           mapInstance.current.removeLayer(routeLayer.current);
         }
 
-        // @ts-ignore
         routeLayer.current = L.polyline(coordinates, {
           color: '#3b82f6',
           weight: 6,
